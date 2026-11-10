@@ -25,7 +25,8 @@ An enabled provider's `crazyRetry` retries a 429 on that provider before
 falling back. The per-request provider budget counts additional attempts,
 defaults to 20, and is configurable from 1 to 100. It holds each reply
 until a retry is safe, stops on cancellation, and does not replay content
-already passed to the client. It waits at least the requested Retry-After;
+already passed to the client. It waits at least 100 milliseconds between
+attempts, or longer when requested by the upstream's rate-limit headers;
 when the explicit wait is longer than an hour or the client cannot wait,
 it continues through the usual failure and fallback path. Once the budget
 is exhausted, the native short retry and patience loops do not extend it.

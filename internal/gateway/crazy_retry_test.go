@@ -151,6 +151,9 @@ func TestCrazyRetryWaitRespectsRetryAfter(t *testing.T) {
 		want   time.Duration
 		ok     bool
 	}{
+		{header: "", want: 100 * time.Millisecond, ok: true},
+		{header: "0.05", want: 100 * time.Millisecond, ok: true},
+		{header: "0.25", want: 250 * time.Millisecond, ok: true},
 		{header: "3", want: 3 * time.Second, ok: true},
 		{header: now.Add(2 * time.Hour).UTC().Format(http.TimeFormat), ok: false},
 		{header: "7200", ok: false},

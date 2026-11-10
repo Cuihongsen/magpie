@@ -17,5 +17,5 @@ func crazyRetryWait(header http.Header, now time.Time) (time.Duration, bool) {
 			return 0, false
 		}
 	}
-	return max(retryPause, retryAfter(header, now)), true
+	return max(100*time.Millisecond, retryAfter(header, now)), true
 }
