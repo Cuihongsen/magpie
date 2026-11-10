@@ -2,15 +2,20 @@
 
 本目录基于官方 `v0.1.2697`，提交
 `1747559d02c1e03a6f38dc8506b75e545ee4b89a`。
-已部署维护版本为 `0.1.2697-native-recovery1`。定制源码维护于
+已部署维护版本为 `0.1.2697-custom-cooldown15`。定制源码维护于
 `Cuihongsen/magpie` 的 `codex/local-customizations-v2697` 分支，
 官方 `yetone/magpie` 为上游。
 
-待部署变更：`token-mixing/deepseek-v4.1-flash` 的慢启动和 429 默认
+`token-mixing/deepseek-v4.1-flash` 的慢启动和 429 默认
 冷却上限为 15 秒；429 明确给出的较长重试或重置时间仍然遵守。
 429 的冷却仍沿用 Magpie 原来的密钥级作用范围，可能同时影响该密钥的
 其他模型；额度和余额耗尽不使用该 15 秒规则。原生路由的单候选或最后
 备用候选仍可在冷却期间尝试，因此这不是严格的请求间隔保证。
+
+2026-11-10 的 `custom-cooldown15` 二进制 SHA-256 为
+`85ce807d4a7b503c2a2234b0974dc498d315292cef94f20d5beb6e36b63b536d`。
+本机回环假上游验证了 combined-token 恢复，定向路由和 race 测试通过。
+完整 `go test -tags nogui ./...` 有下文列出的四项既有失败。
 
 ## 行为
 
