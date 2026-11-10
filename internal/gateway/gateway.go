@@ -3868,7 +3868,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// no token estimate filters those members. Nobody rests.
 			tokens := 0
 			if hw.code() != http.StatusRequestEntityTooLarge {
-				if req, err := parse(from, attemptBody); err == nil {
+				if _, prompt, ok := combinedTokenLimit(wordsOf(hw.errBody())); ok {
+					tokens = prompt
+				} else if req, err := parse(from, attemptBody); err == nil {
 					tokens = estimate(req)
 				}
 			}
@@ -8984,6 +8986,11 @@ func overflowed(status int, body []byte) bool {
 func tooLong(status int, msg string) bool {
 	if status < 400 || status >= 500 || status == http.StatusTooManyRequests {
 		return false
+	}
+	if !paceWords.MatchString(msg) {
+		if _, _, ok := combinedTokenLimit([]byte(msg)); ok {
+			return true
+		}
 	}
 	m := strings.ToLower(msg)
 	if strings.Contains(m, "max_tokens") || strings.Contains(m, "max_output_tokens") || strings.Contains(m, "max_completion_tokens") {

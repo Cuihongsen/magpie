@@ -130,7 +130,9 @@ func withMaxOutput(proto provider.Protocol, body []byte, limit int) []byte {
 // the prompt alone fills the window.
 func replyLeft(msg []byte) int {
 	window, prompt := 0, 0
-	if m := windowAndPrompt.FindSubmatch(msg); m != nil {
+	if combinedWindow, combinedPrompt, ok := combinedTokenLimit(msg); ok {
+		return max(0, combinedWindow-combinedPrompt)
+	} else if m := windowAndPrompt.FindSubmatch(msg); m != nil {
 		window, _ = strconv.Atoi(string(m[1]))
 		prompt, _ = strconv.Atoi(string(m[2]))
 		if m[2] == nil {
@@ -144,6 +146,29 @@ func replyLeft(msg []byte) int {
 		return 0
 	}
 	return window - prompt
+}
+
+var combinedTokenWords = regexp.MustCompile(`(?i)accepts at most (\d+) combined input and output tokens\.\s*However, your request has (\d+) input tokens and asks for (\d+) output tokens \((\d+) tokens total\)`)
+
+func combinedTokenLimit(message []byte) (window, prompt int, ok bool) {
+	match := combinedTokenWords.FindSubmatch(message)
+	if match == nil {
+		return 0, 0, false
+	}
+	counts := make([]int, 4)
+	for index, raw := range match[1:] {
+		value, err := strconv.Atoi(string(raw))
+		if err != nil {
+			return 0, 0, false
+		}
+		counts[index] = value
+	}
+	window, prompt = counts[0], counts[1]
+	output, total := counts[2], counts[3]
+	if window <= 0 || total <= window || prompt > total || total-prompt != output {
+		return 0, 0, false
+	}
+	return window, prompt, true
 }
 
 // windowAndPrompt matches the window and the prompt's part of a refusal
@@ -276,6 +301,9 @@ func outputFieldRefused(status int, body []byte) bool {
 		return false
 	}
 	w := wordsOf(body)
+	if _, _, ok := combinedTokenLimit(w); ok {
+		return false
+	}
 	if replyLeft(w) > 0 {
 		return false
 	}

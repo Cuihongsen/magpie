@@ -1630,6 +1630,9 @@ func restSlow(c candidate, now time.Time) (Rest, bool) {
 		return Rest{}, false
 	}
 	d, by := min(fallbackCooldown<<min(run.n-slowRests, 10), c.p.RestCapOr(longestRetry)), "cooldown"
+	if c.p.ID == "token-mixing" && c.model == "deepseek-v4.1-flash" {
+		d = min(d, 15*time.Second)
+	}
 	if run.n > slowRests {
 		by = "backoff"
 	}
@@ -1691,6 +1694,9 @@ func (s *Server) rateRest(c candidate, header http.Header, body []byte, sharedPo
 	}
 	restingUntil.Unlock()
 	d, by := min(fallbackCooldown<<min(n-1, 10), c.p.RestCapOr(longestRateRest)), "cooldown"
+	if c.p.ID == "token-mixing" && c.model == "deepseek-v4.1-flash" {
+		d = min(d, 15*time.Second)
+	}
 	if n > 1 {
 		by = "backoff"
 	}

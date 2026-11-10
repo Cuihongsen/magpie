@@ -7,6 +7,20 @@ doesn't speak the agent's API, the gateway translates. When an upstream
 fails before any of the reply is sent, the gateway moves to the next
 candidate.
 
+Combined input/output admission errors are parsed by `combinedTokenLimit`
+in `internal/gateway/maxoutput.go`. The reported input, output and total
+must be consistent and exceed a positive window. If at least 8192 tokens
+remain, `replyLeft` uses the upstream's exact input count to reduce the
+output allowance for one retry of that candidate. It does not change the
+prompt or persist that request's remaining allowance as a model setting.
+An exhausted window or another refusal follows the existing context
+fallback path, without resting the provider; no suitable candidate leaves
+the client a context-overflow signal. Wrapped LiteLLM combined-limit
+messages are not treated as unsupported output fields, including when the
+input alone fills the window. `combined_tokens_test.go` covers the reported
+500000/157364/384000 failure, protocol translation, bounded retries,
+fallback, compaction and invalid counters.
+
 This page covers how a request is routed. Plugins that change requests and
 replies are in [Gateway middleware](gateway-middleware.md). Subscriptions
 served by a plugin are in [Provider and plugin ownership](provider-plugins.md).
