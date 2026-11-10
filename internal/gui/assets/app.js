@@ -7662,6 +7662,29 @@ function proxyPicker() {
   return box;
 }
 
+function crazyRetryField() {
+  const [toggle, check] = tick(t("Crazy retry"), !!draft.crazyRetry);
+  const count = input(draft.crazyRetryCount ?? 20, "20", "number");
+  count.classList.add("crazy-retry-count");
+  Object.assign(count, { min: "0", max: "100", step: "1", inputMode: "numeric", disabled: !check.checked });
+  check.onchange = () => { draft.crazyRetry = check.checked; count.disabled = !check.checked; };
+  count.oninput = () => { draft.crazyRetryCount = count.value; draft.crazyRetryBadInput = count.validity.badInput; };
+  return [
+    ...field(t("Crazy retry"), toggle),
+    ...field(t("Retry count"), count, t("Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.")),
+  ];
+}
+
+function crazyRetryOfDraft(ed) {
+  const value = String(draft.crazyRetryCount ?? 20).trim();
+  if (draft.crazyRetryBadInput || (value && (!/^\d+$/.test(value) || +value > 100))) {
+    shown(ed.querySelector(".crazy-retry-count"))?.focus(NO_SCROLL);
+    editorError(t("Retry count: a whole number from 0 to 100; 0 uses 20"), "warn");
+    return null;
+  }
+  return { crazyRetry: !!draft.crazyRetry, crazyRetryCount: +value };
+}
+
 // concurrencyField: requests each key or account has out at once (Lemon:
 // Codex risk control past five); "" takes the plugin's, as its placeholder
 function concurrencyField(p) {
@@ -9034,7 +9057,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, crazyRetry: !!p.crazyRetry, crazyRetryCount: p.crazyRetryCount || 20, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
 }
 
 // duplicateProvider opens the Add form on a copy of p (#268): its URLs,
@@ -9305,6 +9328,7 @@ function drawEditor(p, presetID) {
   adv.append(el("summary", "", t("Advanced")));
   const advIn = el("div", "inner");
   adv.append(advIn);
+  advIn.append(...crazyRetryField());
 
   const unmaskRow = (hint, urls) => {
     const [ltk, lcb] = tick(t("Send requests unmasked"), !!draft.unredacted);
@@ -9370,6 +9394,8 @@ function drawEditor(p, presetID) {
     cancel.onclick = cancelEdit;
     const saveBtn = el("button", "text primary", t("Save"));
     saveBtn.onclick = () => {
+      const retry = crazyRetryOfDraft(ed);
+      if (!retry) return;
       const cx = parseContexts(draft.contexts || "");
       if (cx.error) return contextError(ed, cx.error);
       const ox = parseContexts(draft.outputs || "");
@@ -9398,6 +9424,7 @@ function drawEditor(p, presetID) {
       const picked = accountModelsDraft(p);
       if (picked === false) return pickError();
       const body = { id: p.id, models: chosenIds(), noModels: noneChosen(), bestInFamily: bestChosen(), unlisted: draft.unlisted, hiddenDrawers: draft.hiddenDrawers, fallback: draft.fallback, contexts: cx.map, outputs: ox.map, compacts: cpx.map, proxy, accountProxies: own.map, maxConcurrency, maxAccounts, ...queue, priceRate, rateWindows, modelPrefs: modelPrefsOfDraft(), pinUpstream: !!draft.pinUpstream, unredacted: !!draft.unredacted, countFree: !!draft.countFree, ...(p.carriesCompaction ? { nativeCompaction: !!draft.nativeCompaction } : {}), ...routingOfDraft(p) };
+      Object.assign(body, retry);
       saving(saveBtn, t("Saving…"));
       saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
     bar.append(cancel, saveBtn);
@@ -10001,6 +10028,9 @@ function drawEditor(p, presetID) {
     body.countFree = !!draft.countFree;
     if (tlsTakes()) body.insecureTLS = !!draft.insecureTLS && onHTTPS();
     if (custom) body.limitRestOff = !!draft.limitRestOff;
+    const retry = crazyRetryOfDraft(ed);
+    if (!retry) return;
+    Object.assign(body, retry);
     if (!decideOnly(p || pr)) body.nativeCompaction = !!draft.nativeCompaction && carriesCompaction();
     body.passUserAgent = !!draft.passUserAgent && uaPassable();
     const cx = parseContexts(draft.contexts || "");

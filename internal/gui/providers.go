@@ -123,7 +123,9 @@ type providerJSON struct {
 	TakesInsecureTLS bool `json:"takesInsecureTLS"`
 	// asked as usual after a quota refusal or a 429, never set aside for
 	// it (provider.LimitRestOff)
-	LimitRestOff bool `json:"limitRestOff"`
+	LimitRestOff    bool `json:"limitRestOff"`
+	CrazyRetry      bool `json:"crazyRetry"`
+	CrazyRetryCount int  `json:"crazyRetryCount"`
 	// Codex's compaction asked of it as Codex sent it, its sealed item
 	// back as it came (provider.NativeCompaction, #1099); CarriesCompaction: its
 	// wire can carry it, so the editor offers it
@@ -679,11 +681,15 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
+		CrazyRetry: p.CrazyRetry, CrazyRetryCount: p.CrazyRetryCount,
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate,
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
 		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
+	}
+	if out.CrazyRetryCount == 0 {
+		out.CrazyRetryCount = provider.DefaultCrazyRetryCount
 	}
 	if p.Account != nil {
 		for _, r := range p.AccountRefs() {
@@ -1343,7 +1349,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			InsecureTLS *bool `json:"insecureTLS"`
 			// LimitRestOff is whether a quota refusal or a 429 leaves it
 			// asked as usual; a save that leaves it out keeps it
-			LimitRestOff *bool `json:"limitRestOff"`
+			LimitRestOff    *bool `json:"limitRestOff"`
+			CrazyRetry      *bool `json:"crazyRetry"`
+			CrazyRetryCount *int  `json:"crazyRetryCount"`
 			// MaxConcurrency is how many requests each of its keys or
 			// accounts has out at once: a number (0 none), null for what
 			// its plugin says or none; a save that leaves it out keeps it
@@ -1703,6 +1711,19 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if req.New {
 				// a second one of a preset, or a name already in use, is
 				// added beside the first under the next free id
+				if req.CopyOf != "" && (req.CrazyRetry == nil || req.CrazyRetryCount == nil) {
+					source, err := provider.Find(req.CopyOf)
+					if err != nil {
+						fail(rw, err)
+						return
+					}
+					if req.CrazyRetry == nil {
+						in.CrazyRetry = source.CrazyRetry
+					}
+					if req.CrazyRetryCount == nil {
+						in.CrazyRetryCount = source.CrazyRetryCount
+					}
+				}
 				if req.Proxy != nil {
 					in.Proxy = *req.Proxy
 				}
@@ -1711,6 +1732,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				if req.LimitRestOff != nil {
 					in.LimitRestOff = *req.LimitRestOff
+				}
+				if req.CrazyRetry != nil {
+					in.CrazyRetry = *req.CrazyRetry
+				}
+				if req.CrazyRetryCount != nil {
+					in.CrazyRetryCount = *req.CrazyRetryCount
 				}
 				add := provider.Add
 				if req.CopyOf != "" {
@@ -1748,6 +1775,16 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.LimitRestOff = *req.LimitRestOff
 				} else if old != nil {
 					in.LimitRestOff = old.LimitRestOff
+				}
+				if req.CrazyRetry != nil {
+					in.CrazyRetry = *req.CrazyRetry
+				} else if old != nil {
+					in.CrazyRetry = old.CrazyRetry
+				}
+				if req.CrazyRetryCount != nil {
+					in.CrazyRetryCount = *req.CrazyRetryCount
+				} else if old != nil {
+					in.CrazyRetryCount = old.CrazyRetryCount
 				}
 				if keepCC && old != nil {
 					in.MaxConcurrency = old.MaxConcurrency

@@ -21,6 +21,15 @@ input alone fills the window. `combined_tokens_test.go` covers the reported
 500000/157364/384000 failure, protocol translation, bounded retries,
 fallback, compaction and invalid counters.
 
+An enabled provider's `crazyRetry` retries a 429 on that provider before
+falling back. The per-request provider budget counts additional attempts,
+defaults to 20, and is configurable from 1 to 100. It holds each reply
+until a retry is safe, stops on cancellation, and does not replay content
+already passed to the client. It waits at least the requested Retry-After;
+when the explicit wait is longer than an hour or the client cannot wait,
+it continues through the usual failure and fallback path. Once the budget
+is exhausted, the native short retry and patience loops do not extend it.
+
 This page covers how a request is routed. Plugins that change requests and
 replies are in [Gateway middleware](gateway-middleware.md). Subscriptions
 served by a plugin are in [Provider and plugin ownership](provider-plugins.md).

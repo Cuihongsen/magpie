@@ -1,5 +1,30 @@
 # Dropdown browser regression
 
+`provider-crazy-retry.test.cjs` runs with `node --test` and needs no browser.
+It exercises the shipped draft reader, native field helpers and Save handler
+in Node: off/20 defaults, zero and empty counts, enabled/disabled settings,
+integer validation, save/reopen and all five languages. `crazy_retry_test.go`
+drives the real provider save route and reads saved settings back into the
+editor response, including omitted fields, copies and presets. These tests
+do not check browser layout or gateway retry execution.
+
+`provider-crazy-retry-browser.test.cjs` checks the complete provider editor
+and Save flow for built-in accounts, plugin accounts and API key providers
+in all five languages, on headless Chromium and WebKit launched from the CLI.
+It checks real numeric `badInput` (typing `1e` leaves an empty value), refusing
+the save and focusing its inline error, then accepting a genuinely empty field.
+It also covers off/20 defaults, retaining a count while off, reopening,
+and 1/100/0 boundaries. All API requests use isolated fixtures and no user
+browser is opened. The Go copy tests check omitted-field inheritance and
+explicit false/0 overrides through the real save API.
+
+The provider editor is part of the core page, so its retry controls and
+validation stay synchronous beside the other settings. The core script limit
+is raised by exactly 1,264 bytes to 1,535,066 for this addition, with no spare
+room added. Sharing the controls and validation with the account editor adds
+171 bytes, for an effective limit of 1,535,237; the separate app.js limit is
+unchanged.
+
 `modal-backdrop.test.cjs` checks the modal's computed backdrop filter using
 the real stylesheet and platform marker: Windows desktop windows and panels
 keep the dimming veil without filtering, while browser pages, macOS and Linux

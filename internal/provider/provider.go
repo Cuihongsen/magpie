@@ -116,6 +116,9 @@ type Provider struct {
 	// tried in order.
 	Fallback []string `json:"fallback,omitempty"`
 
+	CrazyRetry      bool `json:"crazyRetry,omitempty"`
+	CrazyRetryCount int  `json:"crazyRetryCount,omitempty"`
+
 	// Routing is how requests spread over the keys or accounts it has on:
 	// "" smart, the first while it has quota to spare, then whichever has
 	// the most; "order" in order, the next one only when the one before
@@ -861,6 +864,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.PickedFrom, a.Delisted = pk.PickedFrom, pk.Delisted
 	a.Models, a.Unlisted, a.Off, a.Fallback, a.Routing, a.Affinity, a.KeepLogin, a.KeepLoginAs, a.Contexts, a.Family = pk.Models, pk.Unlisted, pk.Off, pk.Fallback, pk.Routing, pk.Affinity, pk.KeepLogin, pk.KeepLoginAs, pk.Contexts, pk.Family
 	a.SwitchOnly = pk.SwitchOnly
+	a.CrazyRetry, a.CrazyRetryCount = pk.CrazyRetry, pk.CrazyRetryCount
 	a.Sink, a.NoModels, a.BestInFamily = pk.Sink, pk.NoModels, pk.BestInFamily
 	a.NativeCompaction = pk.NativeCompaction
 	a.PromptAsWritten = pk.PromptAsWritten
@@ -984,6 +988,9 @@ func Slug(name string) string {
 
 // Save adds or replaces a provider.
 func Save(p Provider) error {
+	if p.CrazyRetryCount < 0 || p.CrazyRetryCount > MaxCrazyRetryCount {
+		return fmt.Errorf("crazy retry count must be 1..%d (0 leaves it unset)", MaxCrazyRetryCount)
+	}
 	// a key given a Vertex AI provider is refused here, before normalize
 	// drops it: it would never be sent
 	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
@@ -1475,6 +1482,12 @@ func ownNetwork(hostport string) bool {
 func normalize(p Provider) Provider {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	p.Name = strings.TrimSpace(p.Name)
+	if p.CrazyRetryCount < 0 || p.CrazyRetryCount > MaxCrazyRetryCount {
+		p.CrazyRetryCount = 0
+	}
+	if p.CrazyRetry {
+		p.CrazyRetryCount = p.CrazyRetryLimit()
+	}
 	if p.Patience < 0 {
 		p.Patience = PatienceOff
 	}

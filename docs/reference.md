@@ -1860,6 +1860,14 @@ and the next request asks it again. A refused key (401, 403), a model it
 doesn't serve, being out of quota or credit, or a rate limit still rests
 it as above.
 
+**Crazy retry.** A provider can retry a 429 before falling back. It is off
+by default; enable it with `magpie provider set <id> crazy-retry=on` or in
+the provider editor's Advanced section. It defaults to 20 extra attempts;
+`crazy-retry-count=1..100` changes the limit; `0` restores the default. Each request keeps a separate
+budget per provider. A retry waits for the vendor's Retry-After; if that
+wait exceeds one hour or the client cannot wait, normal failure handling
+resumes. A response already sent to the client is never replayed.
+
 **When the safety filter refuses.** A reply the vendor's safety filter
 refuses before any of it is said rests nobody: it is about what was asked,
 not the account. By default the same request is asked of the model's other

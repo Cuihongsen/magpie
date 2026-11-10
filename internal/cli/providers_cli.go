@@ -57,6 +57,9 @@ const providerUsage = `usage:
                                           while it is busy or briefly rate limited, asking again after a pause
                                           (at most 4m); patience=off hands the agent the error at once;
                                           patience=default, 1m
+                                          crazy-retry=on|off enables Crazy Retry (default off);
+                                          crazy-retry-count=0..100 sets its retry count (0 restores default 20),
+                                          kept while off; show displays 20 when the count is unset
   magpie provider key <id> <key>          change the API key
   magpie provider icon <id> <file|name>   give a custom provider a picture (PNG, JPEG, SVG…) or a built-in icon
   magpie provider fallback <id> <provider/model>…   where requests go when it's out of quota or down (none clears)
@@ -849,6 +852,19 @@ func showProvider(p provider.Provider) error {
 	kv("responses", p.Responses)
 	kv("anthropic", p.Anthropic)
 	kv("gemini", p.Gemini)
+	retryState := "off"
+	if p.CrazyRetry {
+		retryState = "on"
+	}
+	kv("crazy-retry", retryState)
+	retryCount := p.CrazyRetryCount
+	if p.CrazyRetry {
+		retryCount = p.CrazyRetryLimit()
+	}
+	if retryCount == 0 {
+		retryCount = provider.DefaultCrazyRetryCount
+	}
+	kv("crazy-retry-count", strconv.Itoa(retryCount))
 	if p.Searches {
 		kv("search", "by itself"+muted.Render("  a client's web search goes to it as sent"))
 	}
@@ -1171,6 +1187,21 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 				return err
 			}
 			p.Patience = n
+		case "crazy-retry":
+			switch strings.ToLower(v) {
+			case "on", "yes", "true":
+				p.CrazyRetry = true
+			case "off", "no", "false":
+				p.CrazyRetry = false
+			default:
+				return fmt.Errorf("crazy-retry=on|off")
+			}
+		case "crazy-retry-count":
+			count, err := strconv.Atoi(v)
+			if err != nil || count < 0 || count > provider.MaxCrazyRetryCount {
+				return fmt.Errorf("crazy-retry-count=0..%d (0 restores default %d)", provider.MaxCrazyRetryCount, provider.DefaultCrazyRetryCount)
+			}
+			p.CrazyRetryCount = count
 		case "user-agent", "ua":
 			// agent: a request goes with the User-Agent the agent that
 			// sent it gave, for a coding plan that serves only agents it

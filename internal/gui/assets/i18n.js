@@ -4,6 +4,10 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Crazy retry": "疯狂重试",
+    "Retry count": "重试次数",
+    "Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.": "默认关闭。开启后最多重试指定次数。0 或留空表示 20 次；其他值须为 1 到 100 的整数。",
+    "Retry count: a whole number from 0 to 100; 0 uses 20": "重试次数：请输入 0 到 100 的整数；0 表示 20 次",
     "Claude Code runs as": "Claude Code 运行方式",
     "Interactive mode (TUI)": "交互模式（TUI）",
     "Last request {ago}: interactive mode": "上次请求 {ago}：交互模式",
@@ -4392,6 +4396,10 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
   },
   "zh-TW": {
+    "Crazy retry": "瘋狂重試",
+    "Retry count": "重試次數",
+    "Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.": "預設關閉。開啟後最多重試指定次數。0 或留空表示 20 次；其他值須為 1 到 100 的整數。",
+    "Retry count: a whole number from 0 to 100; 0 uses 20": "重試次數：請輸入 0 到 100 的整數；0 表示 20 次",
     "Claude Code runs as": "Claude Code 執行方式",
     "Interactive mode (TUI)": "互動模式（TUI）",
     "Last request {ago}: interactive mode": "上次請求 {ago}：互動模式",
@@ -8765,6 +8773,10 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
   },
   ja: {
+    "Crazy retry": "クレイジーリトライ",
+    "Retry count": "再試行回数",
+    "Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.": "初期設定はオフです。有効にすると指定回数まで再試行します。0 または空欄は 20 回、それ以外は 1〜100 の整数を指定してください。",
+    "Retry count: a whole number from 0 to 100; 0 uses 20": "再試行回数：0〜100 の整数を入力してください。0 は 20 回です",
     "Claude Code runs as": "Claude Code の実行方式",
     "Interactive mode (TUI)": "対話モード（TUI）",
     "Last request {ago}: interactive mode": "前回のリクエスト（{ago}）：対話モード",
@@ -13140,6 +13152,10 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
   },
   de: {
+    "Crazy retry": "Intensive Wiederholungen",
+    "Retry count": "Anzahl der Wiederholungen",
+    "Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.": "Standardmäßig aus. Wenn aktiviert, wird höchstens so oft erneut versucht. 0 oder leer bedeutet 20; sonst eine ganze Zahl von 1 bis 100 eingeben.",
+    "Retry count: a whole number from 0 to 100; 0 uses 20": "Wiederholungen: eine ganze Zahl von 0 bis 100; 0 bedeutet 20",
     "Claude Code runs as": "Claude Code läuft als",
     "Interactive mode (TUI)": "Interaktiver Modus (TUI)",
     "Last request {ago}: interactive mode": "Letzte Anfrage {ago}: interaktiver Modus",

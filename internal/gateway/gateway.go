@@ -2780,11 +2780,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	promptRead := s.inspectPrompt(tr, from, body, body, sentWhole)
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
-	sent := ""       // the reasoning the last try's model was asked for
-	wentAt := ""     // and the level that went, once translated (wireEffort, #1636)
-	wentTier := ""   // the service tier the last try went out at (noteWireTier, #1784)
-	where := ""      // the last try's provider.Where, for the usage
-	again := 0       // times the last one left has been tried again
+	sent := ""     // the reasoning the last try's model was asked for
+	wentAt := ""   // and the level that went, once translated (wireEffort, #1636)
+	wentTier := "" // the service tier the last try went out at (noteWireTier, #1784)
+	where := ""    // the last try's provider.Where, for the usage
+	again := 0     // times the last one left has been tried again
+	crazyRetries := map[string]int{}
+	crazyStopped := map[string]Try{}
 	resealed := 0    // what of the conversation another account sealed was taken out: its reasoning, then its compaction
 	repicked := 0    // times Copilot's Auto was asked again for a model the account is served
 	floored := false // the reply's length raised to what the provider takes
@@ -2890,12 +2892,25 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the row of the try before, when it failed, billed something and
 	// handed the request on, written once the next try begins
 	var failedRow func()
+	var lastReply *holdWriter
 	for i := 0; i < len(cands); i++ {
+		c := cands[i]
+		if _, stopped := crazyStopped[c.p.ID]; stopped {
+			if i < len(cands)-1 {
+				continue
+			}
+			if f := failure(call.Status, []byte(call.Error)); other != nil && (f == failQuota || f == failCredit) {
+				call.Status, call.Error = other.Status, other.Error
+				failTo(w, kept, from, call.Status, call.Error)
+			} else {
+				lastReply.release()
+			}
+			break
+		}
 		if failedRow != nil {
 			failedRow()
 			failedRow = nil
 		}
-		c := cands[i]
 		if handed.release != nil && handed.who != c.who() {
 			handed.release()
 			handed.release = nil
@@ -2957,7 +2972,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// for its allowance running out to be told as that one's error
 		// and once the agent has the stream's headers from an earlier try's
 		// keepalives, for a failure to be told as the stream's error
-		hw := newHoldWriter(w, !last || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2 ||
+		hw := newHoldWriter(w, !last || c.p.CrazyRetryLimit() > 0 || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2 ||
 			patience > 0 && rounds < replanRounds && (waitFrom.IsZero() || time.Since(waitFrom) < patience) || wantWhole)
 		// a compaction's summary is held to its end, for a cut or an
 		// error halfway to go to the next candidate (#2274)
@@ -3433,6 +3448,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			break
 		}
 		hw.settle()
+		lastReply = hw
 		if hw.handedOver {
 			// its refusal came after its reasoning went to the agent: the
 			// next try's stream follows it as the same reply
@@ -3594,6 +3610,30 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			continue
 		}
 		watched.attempt(call, try, c.p.ID, sent, hw, capture)
+		crazyRate := c.p.CrazyRetryLimit() > 0 && !held && call.To != "" && hw.code() == http.StatusTooManyRequests
+		if crazyRate && crazyRetries[c.p.ID] < c.p.CrazyRetryLimit() && hw.mayAskAgain() && !hw.refused {
+			if wait, ok := crazyRetryWait(hw.header, time.Now()); ok && !kept.tooQuiet(wait) {
+				crazyRetries[c.p.ID]++
+				try.Fail, try.Again = failureOf(c, hw.code(), hw.errBody()), wait.Milliseconds()
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				skipped = append(skipped, c.label()+": "+call.Error)
+				if pauseAlive(r.Context(), w, kept, streams, start, wait) {
+					i--
+					continue
+				}
+				call.Status, call.Error = canceled(r.Context())
+				try.Status, try.Error, try.Fail, try.Gone = call.Status, call.Error, failCanceled, true
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				break
+			}
+		}
+		if crazyRate && !hw.passing {
+			crazyStopped[c.p.ID] = try
+			busyNow = slices.DeleteFunc(busyNow, func(item busyTry) bool { return item.c.p.ID == c.p.ID })
+			left := slices.DeleteFunc(slices.Clone(cands[i+1:]), func(item candidate) bool { return item.p.ID == c.p.ID })
+			cands = append(cands[:i+1:i+1], left...)
+			last = i == len(cands)-1
+		}
 		if autoPicks(c) && repicked < 2 && !hw.passing && hw.code() == http.StatusBadRequest &&
 			(provider.CopilotRefusal(hw.errBody()) || wrongEndpoint(hw.code(), hw.errBody())) {
 			// Copilot refused the model its Auto picked, and Auto has
@@ -3984,7 +4024,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		// nor is it asked again after a moment
 		protected = protected || zdr || noRoom
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !last && hw.failed() && spentAfter(cands[i+1:]) {
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !crazyRate && !protected && !last && hw.failed() && spentAfter(cands[i+1:]) {
 			// the others left are out of their allowance (Discord, waroy: a
 			// Codex account run out, Grok busy a moment): this one is the
 			// last that may answer, and is tried again as the last is
@@ -4074,7 +4114,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 		}
-		if hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused && !creditsAsked[c.rest] && creditsAgain(c, hw.code(), hw.errBody()) {
+		if hw.failed() && !crazyRate && !hw.passing && !hw.turnedAway && !hw.refused && !creditsAsked[c.rest] && creditsAgain(c, hw.code(), hw.errBody()) {
 			// a Codex account that holds credits, refused as out of its
 			// allowance: ChatGPT may turn away the turn that uses the
 			// window up before it spends the credits, and answers the
@@ -4174,7 +4214,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				forbade = append(forbade, forbidden{c: c, rest: rest, try: at})
 			}
 			skipped = append(skipped, c.label()+": "+call.Error)
-			if waitsOf(c.patience, patienceFallback) > 0 && !hw.turnedAway && busy(hw.code(), hw.errBody()) {
+			if waitsOf(c.patience, patienceFallback) > 0 && !crazyRate && !hw.turnedAway && busy(hw.code(), hw.errBody()) {
 				busyNow = noteBusy(busyNow, c, hw.header)
 			}
 			continue
@@ -4193,7 +4233,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// (spentAfter) and the agent is told theirs
 		lastSpent := last && isGroup && len(busyNow) > 0 && !hw.passing && hw.failed() && !busy(hw.code(), hw.errBody()) &&
 			slices.Contains([]string{failQuota, failCredit}, failure(hw.code(), hw.errBody())) && !spentAfter([]candidate{c})
-		if _, same := passing(hw.code(), hw.header, hw.errBody(), again); last && patience > 0 && !protected && !hw.turnedAway && !hw.refused && hw.failed() && (busy(hw.code(), hw.errBody()) || lastSpent) &&
+		if _, same := passing(hw.code(), hw.header, hw.errBody(), again); last && patience > 0 && (!crazyRate || len(busyNow) > 0) && !protected && !hw.turnedAway && !hw.refused && hw.failed() && (busy(hw.code(), hw.errBody()) || lastSpent || crazyRate) &&
 			(isGroup || !codexReset(hw.code(), hw.errBody())) &&
 			(len(busyNow) > 0 || waitsOf(c.patience, patienceFallback) > 0 && !same) {
 			// every member has failed, each in a way that passes — busy,
@@ -4210,7 +4250,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if waitFrom.IsZero() {
 				waitFrom = time.Now()
 			}
-			if waitsOf(c.patience, patienceFallback) > 0 && !lastSpent {
+			if waitsOf(c.patience, patienceFallback) > 0 && !lastSpent && !crazyRate {
 				busyNow = noteBusy(busyNow, c, hw.header)
 			}
 			// nor once Codex would hang up in the pause, for want of an
@@ -4243,7 +4283,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				break
 			}
 		}
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !hw.turnedAway && hw.failed() && waitFrom.IsZero() && !kept.tooQuiet(wait) {
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !crazyRate && !protected && !hw.turnedAway && hw.failed() && waitFrom.IsZero() && !kept.tooQuiet(wait) {
 			// nobody else is left: the same one again, after a moment (not
 			// what Antigravity turned away: it turns it away again; nor
 			// once the group's patience is spent)
@@ -4263,12 +4303,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			break
 		}
 		// (not for one account pinned: the others weren't asked)
-		if !autoReset && pin == "" && last && other == nil && hw.failed() && !hw.passing && !hw.turnedAway && failure(hw.code(), hw.errBody()) == failQuota {
+		if !autoReset && !crazyRate && pin == "" && last && other == nil && hw.failed() && !hw.passing && !hw.turnedAway && failure(hw.code(), hw.errBody()) == failQuota {
 			// everyone is out of their allowance: a Codex or Claude account
 			// the user lets spend its resets by itself, its week used up,
 			// spends one and is asked again
 			autoReset = true
-			if pick, out, ok := s.autoReset(r.Context(), all, c, pl.held); ok {
+			resetCandidates := slices.DeleteFunc(slices.Clone(all), func(item candidate) bool {
+				_, stopped := crazyStopped[item.p.ID]
+				return stopped
+			})
+			resetHeld := slices.DeleteFunc(slices.Clone(pl.held), func(item candidate) bool {
+				_, stopped := crazyStopped[item.p.ID]
+				return stopped
+			})
+			if pick, out, ok := s.autoReset(r.Context(), resetCandidates, c, resetHeld); ok {
 				try.Fail = failQuota
 				try.Reset = &AutoReset{Who: pick.p.Account.User, Text: out.Text(), Agent: pick.p.Account.Agent}
 				s.trace.update(tr, func(t *Route) {

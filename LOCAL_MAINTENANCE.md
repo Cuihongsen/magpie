@@ -17,6 +17,16 @@
 本机回环假上游验证了 combined-token 恢复，定向路由和 race 测试通过。
 完整 `go test -tags nogui ./...` 有下文列出的四项既有失败。
 
+`0.1.2697-crazy-retry20` 在渠道商高级设置和 CLI 增加疯狂重试：
+默认关闭，开启后每次请求遇到 429 最多额外重试 20 次，次数可设为
+1–100；0 恢复默认值。重试遵循上游 Retry-After，显式等待超过一小时
+时转入原有失败处理，取消或已经开始输出时不重放。用本机隔离假上游
+验证了设置、重试、耗尽降级、关闭及已有 combined-token 恢复；
+定向 race 和界面测试通过。完整 Go 回归仍为下列四项既有失败，
+界面导航超时静态测试另有 `account-rows-fit` 和 `window-visibility`
+两项既有问题。签名后程序 SHA-256：
+`2d15d25fe19eb0552d90bb9589271b0d1a041dfaa4c2800488490fec3b724812`。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output
