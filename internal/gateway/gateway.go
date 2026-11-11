@@ -4986,6 +4986,7 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 	// the reply it returns says which of its headers go to the agent
 	// (#4145), not one asked before it
 	defer func() {
+		selectErrorCooldownReply(ctx, p.ID, res, err)
 		if err == nil {
 			heardReply(ctx, p, res)
 			heardNet() // the network is up (offline.go)
@@ -5341,12 +5342,14 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	// Zhipu's and Z.ai's Responses API refuses a key 200 in the platform's
 	// envelope: the 401 (or 429 …) it stands for, so the next key or
 	// member is asked and the agent told why (@xanahopper on X)
+	sourceResponse := res
 	res = notAnAPIReply(clineUnwrapped(p, provider.ZhipuEnveloped(req, openCodeBareRefusal(req, res))), "")
 	if p.Account != nil && p.Account.Agent == "codex" {
 		// a large request ChatGPT closed the connection on: asked again,
 		// nobody resting for it, and said what may help (#1628)
 		res = codexDropped(res, sent)
 	}
+	inheritErrorCooldownReply(ctx, p.ID, res, sourceResponse)
 	// what a Codex account's reply says it has used, for its cap (#1295)
 	heardCodexLimits(p, res)
 	noteSignIn(ctx, p.Account, req, res)

@@ -56,8 +56,14 @@ func errorCooldownRemaining(candidates []candidate, stopped string) []candidate 
 type errorCooldownAttemptKey struct{}
 
 type errorCooldownAttempt struct {
-	mu         sync.Mutex
-	provider   string
+	mu        sync.Mutex
+	provider  string
+	reply     *errorCooldownEvidence
+	responses map[*http.Response]*errorCooldownEvidence
+	requests  map[*http.Request]*errorCooldownEvidence
+}
+
+type errorCooldownEvidence struct {
 	httpStatus int
 	status     int
 	body       []byte
@@ -68,48 +74,92 @@ func observeErrorCooldownReply(ctx context.Context, id string, response *http.Re
 	if attempt == nil || attempt.provider != id {
 		return
 	}
+	var evidence *errorCooldownEvidence
 	attempt.mu.Lock()
-	attempt.httpStatus, attempt.status, attempt.body = 0, 0, nil
+	attempt.reply = nil
 	if err == nil && response != nil {
-		attempt.httpStatus = response.StatusCode
+		evidence = &errorCooldownEvidence{httpStatus: response.StatusCode}
+		if attempt.responses == nil {
+			attempt.responses = map[*http.Response]*errorCooldownEvidence{}
+			attempt.requests = map[*http.Request]*errorCooldownEvidence{}
+		}
+		attempt.responses[response] = evidence
+		if response.Request != nil {
+			attempt.requests[response.Request] = evidence
+		}
+		attempt.reply = evidence
 	}
 	attempt.mu.Unlock()
 	if err == nil && response != nil && response.Body != nil && response.StatusCode < 400 {
 		response.Body = &errorCooldownBody{
 			ReadCloser: response.Body,
 			attempt:    attempt,
+			reply:      evidence,
 			stream:     strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream"),
 		}
+	}
+}
+
+func selectErrorCooldownReply(ctx context.Context, id string, response *http.Response, err error) {
+	attempt, _ := ctx.Value(errorCooldownAttemptKey{}).(*errorCooldownAttempt)
+	if attempt == nil || attempt.provider != id {
+		return
+	}
+	attempt.mu.Lock()
+	defer attempt.mu.Unlock()
+	attempt.reply = nil
+	if err == nil && response != nil {
+		attempt.reply = attempt.responses[response]
+		if attempt.reply == nil && response.Request != nil {
+			attempt.reply = attempt.requests[response.Request]
+		}
+	}
+}
+
+func inheritErrorCooldownReply(ctx context.Context, id string, response, source *http.Response) {
+	attempt, _ := ctx.Value(errorCooldownAttemptKey{}).(*errorCooldownAttempt)
+	if attempt == nil || attempt.provider != id || response == nil || source == nil {
+		return
+	}
+	attempt.mu.Lock()
+	defer attempt.mu.Unlock()
+	if evidence := attempt.responses[source]; evidence != nil {
+		attempt.responses[response] = evidence
 	}
 }
 
 func (attempt *errorCooldownAttempt) failed(status int, body []byte) (int, []byte, bool) {
 	attempt.mu.Lock()
 	defer attempt.mu.Unlock()
-	if errorCooldownStatus(attempt.status) {
-		return attempt.status, attempt.body, true
+	reply := attempt.reply
+	if reply == nil {
+		return 0, nil, false
 	}
-	if errorCooldownStatus(attempt.httpStatus) {
+	if errorCooldownStatus(reply.status) {
+		return reply.status, reply.body, true
+	}
+	if errorCooldownStatus(reply.httpStatus) {
 		if errorCooldownStatus(status) {
 			return status, body, true
 		}
-		return attempt.httpStatus, body, true
+		return reply.httpStatus, body, true
 	}
 	return 0, nil, false
 }
 
-func (attempt *errorCooldownAttempt) note(status int, body []byte) {
-	if !errorCooldownStatus(status) {
+func (attempt *errorCooldownAttempt) note(reply *errorCooldownEvidence, status int, body []byte) {
+	if reply == nil || !errorCooldownStatus(status) {
 		return
 	}
 	attempt.mu.Lock()
-	attempt.status, attempt.body = status, slices.Clone(body)
+	reply.status, reply.body = status, slices.Clone(body)
 	attempt.mu.Unlock()
 }
 
 type errorCooldownBody struct {
 	io.ReadCloser
 	attempt *errorCooldownAttempt
+	reply   *errorCooldownEvidence
 	stream  bool
 	pending []byte
 	over    bool
@@ -141,7 +191,7 @@ func (body *errorCooldownBody) Read(buffer []byte) (int, error) {
 		}
 	} else if err == io.EOF {
 		if status, message, failed := errorReply(body.pending); failed {
-			body.attempt.note(status, []byte(message))
+			body.attempt.note(body.reply, status, []byte(message))
 		}
 		body.pending = nil
 	}
@@ -155,6 +205,6 @@ func (body *errorCooldownBody) Read(buffer []byte) (int, error) {
 func (body *errorCooldownBody) event(event []byte) {
 	kind, status, message := streamEvent(event)
 	if kind == eventError || kind == eventRefusalError {
-		body.attempt.note(status, []byte(message))
+		body.attempt.note(body.reply, status, []byte(message))
 	}
 }
