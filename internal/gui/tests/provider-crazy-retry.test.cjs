@@ -44,33 +44,64 @@ function editor(lang = "en") {
   });
   vm.runInContext(translations, context);
   context.t = (text) => lang === "en" ? text : vm.runInContext("I18N", context)[lang][text] || assert.fail(`${lang}: missing ${text}`);
-  for (const name of ["el", "field", "input", "tick", "baseAPIOf", "draftOf"]) load(context, name);
+  for (const name of ["el", "field", "input", "tick", "baseAPIOf", "concurrencyDraft", "draftOf"]) load(context, name);
   return context;
 }
 
-test("opening legacy and zero-count settings shows off/20 and preserves explicit choices", () => {
+test("opening legacy and zero-count settings shows off/50 and preserves explicit choices", () => {
   const context = editor();
   for (const [settings, on, count] of [
-    [{}, false, 20],
-    [{ crazyRetry: true, crazyRetryCount: 0 }, true, 20],
+    [{}, false, 50],
+    [{ crazyRetry: true, crazyRetryCount: 0 }, true, 50],
+    [{ crazyRetry: true, crazyRetryCount: 20 }, true, 20],
     [{ crazyRetry: true, crazyRetryCount: 7 }, true, 7],
     [{ crazyRetry: false, crazyRetryCount: 100 }, false, 100],
   ]) {
     const draft = context.draftOf({ id: "relay", ...settings });
     assert.equal(draft.crazyRetry, on);
     assert.equal(Number(draft.crazyRetryCount), count);
+    assert.equal(Number(draft.errorCooldownSeconds), 0);
   }
+});
+
+test("error recovery cooldown submits 0 or 1–3600 seconds and preserves saved values", async () => {
+  for (const value of ["", "0", "1", "15", "3600", "-1", "3601", "1.5", "invalid"]) {
+    const context = saveContext({ errorCooldownSeconds: 15 });
+    assert.equal(Number(context.draft.errorCooldownSeconds), 15);
+    context.draft.errorCooldownSeconds = value;
+    await context.save();
+    if (["", "0", "1", "15", "3600"].includes(value)) {
+      assert.equal(context.posted.errorCooldownSeconds, Number(value));
+      assert.equal(Number(context.draftOf(context.posted).errorCooldownSeconds), Number(value));
+    } else {
+      assert.equal(context.posted, undefined);
+      assert(context.error);
+    }
+  }
+});
+
+test("a configured error cooldown opens Advanced while zero keeps it folded", () => {
+  const context = editor();
+  load(context, "advancedSet");
+  assert.equal(context.advancedSet(context.draftOf({ errorCooldownSeconds: 0 }), {}), false);
+  assert.equal(context.advancedSet(context.draftOf({ errorCooldownSeconds: 15 }), {}), true);
 });
 
 for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
   test(`${lang}: the native tick and count retain edits when disabled or redrawn`, () => {
     const context = editor(lang);
     load(context, "crazyRetryField");
+    const help = context.crazyRetryField().flatMap((node) => node.querySelectorAll("div"))
+      .filter((node) => node.classList.contains("hint")).map((node) => node.textContent);
+    assert.match(help[0], /100ms/);
+    assert.match(help[0], /Retry-After/);
+    assert.match(help[0], /50/);
+    assert.match(help[1], /4xx\/5xx/);
     const controls = () => context.crazyRetryField().flatMap((node) => node.querySelectorAll("input"));
     let [toggle, count] = controls();
     assert.equal(toggle.type, "checkbox");
     assert.equal(toggle.checked, false);
-    assert.equal(Number(count.value), 20);
+    assert.equal(Number(count.value), 50);
     assert.equal(count.type, "number");
     assert.equal(count.min, "0");
     assert.equal(count.max, "100");
@@ -121,7 +152,7 @@ function saveContext(settings) {
 
 test("Save submits booleans and integer counts and reopening echoes the submitted settings", async () => {
   for (const [settings, on, count] of [
-    [{}, false, 20],
+    [{}, false, 50],
     [{ crazyRetry: true, crazyRetryCount: 7 }, true, 7],
     [{ crazyRetry: false, crazyRetryCount: 7 }, false, 7],
   ]) {

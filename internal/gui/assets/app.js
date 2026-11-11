@@ -7664,25 +7664,36 @@ function proxyPicker() {
 
 function crazyRetryField() {
   const [toggle, check] = tick(t("Crazy retry"), !!draft.crazyRetry);
-  const count = input(draft.crazyRetryCount ?? 20, "20", "number");
+  const count = input(draft.crazyRetryCount ?? 50, "50", "number");
   count.classList.add("crazy-retry-count");
   Object.assign(count, { min: "0", max: "100", step: "1", inputMode: "numeric", disabled: !check.checked });
   check.onchange = () => { draft.crazyRetry = check.checked; count.disabled = !check.checked; };
   count.oninput = () => { draft.crazyRetryCount = count.value; draft.crazyRetryBadInput = count.validity.badInput; };
+  const cooldown = input(String(draft.errorCooldownSeconds ?? 0), "0", "number");
+  cooldown.classList.add("error-cooldown");
+  Object.assign(cooldown, { min: "0", max: "3600", step: "1", inputMode: "numeric" });
+  cooldown.oninput = () => { draft.errorCooldownSeconds = cooldown.value; draft.errorCooldownBadInput = cooldown.validity.badInput; };
   return [
     ...field(t("Crazy retry"), toggle),
-    ...field(t("Retry count"), count, t("Off by default. Retry up to this many times when enabled. 0 or empty uses 20; otherwise use a whole number from 1 to 100.")),
+    ...field(t("Retry count"), count, t("Off by default. Retries within a request run every 100ms, ignoring longer Retry-After. Count: 1–100; 0 or empty uses 50.")),
+    ...field(t("Error recovery cooldown (seconds)"), cooldown, t("Separate channel cooldown: 0 keeps native behavior; 1–3600 seconds affects upstream 4xx/5xx only. Canceled requests and requests with output are not replayed.")),
   ];
 }
 
 function crazyRetryOfDraft(ed) {
-  const value = String(draft.crazyRetryCount ?? 20).trim();
+  const value = String(draft.crazyRetryCount ?? 50).trim();
   if (draft.crazyRetryBadInput || (value && (!/^\d+$/.test(value) || +value > 100))) {
     shown(ed.querySelector(".crazy-retry-count"))?.focus(NO_SCROLL);
-    editorError(t("Retry count: a whole number from 0 to 100; 0 uses 20"), "warn");
+    editorError(t("Retry count: a whole number from 0 to 100; 0 uses 50"), "warn");
     return null;
   }
-  return { crazyRetry: !!draft.crazyRetry, crazyRetryCount: +value };
+  const seconds = String(draft.errorCooldownSeconds ?? 0).trim();
+  if (draft.errorCooldownBadInput || (seconds && (!/^\d+$/.test(seconds) || +seconds > 3600))) {
+    shown(ed.querySelector(".error-cooldown"))?.focus(NO_SCROLL);
+    editorError(t("Error recovery cooldown: a whole number from 0 to 3600 seconds"), "warn");
+    return null;
+  }
+  return { crazyRetry: !!draft.crazyRetry, crazyRetryCount: +value, errorCooldownSeconds: +seconds };
 }
 
 // concurrencyField: requests each key or account has out at once (Lemon:
@@ -7871,7 +7882,7 @@ function advancedSet(d, p) {
   return (d.headers || []).some(([k]) => (k || "").trim()) || !!(d.extraBody || "").trim() || !!(d.replyHeaders || "").trim() ||
     !!d.proxyMode || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
-    !!d.rateWindows?.length ||
+    !!d.rateWindows?.length || +d.errorCooldownSeconds > 0 ||
     !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff) ||
     !!d.fallback?.length || !!p?.balanceToken?.set;
 }
@@ -7880,7 +7891,7 @@ function priceRateError(ed) {
   return editorError(t("Price rate: a number from 0 to 1000, at most three decimals"), "warn");
 }
 function concurrencyDraft(p) {
-  return { concurrency: p?.maxConcurrency == null ? "" : String(p.maxConcurrency), priceRate: p?.priceRate ? String(p.priceRate) : "",
+  return { errorCooldownSeconds: p?.errorCooldownSeconds || 0, concurrency: p?.maxConcurrency == null ? "" : String(p.maxConcurrency), priceRate: p?.priceRate ? String(p.priceRate) : "",
     queueLimit: p?.queueLimit ? String(p.queueLimit) : "", queueWait: p?.queueWait ? String(p.queueWait) : "",
     maxRPM: p?.maxRPM ? String(p.maxRPM) : "", maxAccounts: p?.maxAccounts == null ? "" : String(p.maxAccounts) };
 }
@@ -9057,7 +9068,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, crazyRetry: !!p.crazyRetry, crazyRetryCount: p.crazyRetryCount || 20, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, crazyRetry: !!p.crazyRetry, crazyRetryCount: p.crazyRetryCount || 50, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
 }
 
 // duplicateProvider opens the Add form on a copy of p (#268): its URLs,

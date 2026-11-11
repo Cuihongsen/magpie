@@ -1,7 +1,7 @@
 package provider
 
 const (
-	DefaultCrazyRetryCount = 20
+	DefaultCrazyRetryCount = 50
 	MaxCrazyRetryCount     = 100
 )
 

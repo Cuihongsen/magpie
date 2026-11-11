@@ -2,11 +2,11 @@
 
 本目录基于官方 `v0.1.2697`，提交
 `1747559d02c1e03a6f38dc8506b75e545ee4b89a`。
-已部署维护版本为 `0.1.2697-custom-cooldown15`。定制源码维护于
+已部署维护版本为 `0.1.2697-crazy-retry100ms`。定制源码维护于
 `Cuihongsen/magpie` 的 `codex/local-customizations-v2697` 分支，
 官方 `yetone/magpie` 为上游。
 
-`token-mixing/deepseek-v4.1-flash` 的慢启动和 429 默认
+初版 `custom-cooldown15` 中，`token-mixing/deepseek-v4.1-flash` 的慢启动和 429 默认
 冷却上限为 15 秒；429 明确给出的较长重试或重置时间仍然遵守。
 429 的冷却仍沿用 Magpie 原来的密钥级作用范围，可能同时影响该密钥的
 其他模型；额度和余额耗尽不使用该 15 秒规则。原生路由的单候选或最后
@@ -34,6 +34,13 @@
 `a676c05b3478102ef334cb7c14a45e1e4093e44622509b8f37b3e9ce3e366921`。
 本机隔离假上游实测两次重试间隔约 102 毫秒；定向 race 和原有
 combined-token 恢复验证通过。
+
+后续源码增加渠道级 `errorCooldownSeconds`，并按照用户最新要求把疯狂
+重试固定为 100 毫秒，不再让上游 Retry-After 或重置头延长同次重试。
+渠道级恢复冷却与单次请求内重试分开；配置为 15 秒时，上游最终 4xx
+或 5xx 后渠道暂停派发 15 秒，其他可用渠道无需等待。原先本机 37491
+转发器处理 `no healthy deployments` 的恢复逻辑在网关中实现，并沿用
+配置的恢复冷却。取消与已发出的内容不能被重放。
 
 ## 行为
 

@@ -1862,11 +1862,18 @@ it as above.
 
 **Crazy retry.** A provider can retry a 429 before falling back. It is off
 by default; enable it with `magpie provider set <id> crazy-retry=on` or in
-the provider editor's Advanced section. It defaults to 20 extra attempts;
-`crazy-retry-count=1..100` changes the limit; `0` restores the default. Each request keeps a separate
-budget per provider. A retry waits for the vendor's Retry-After; if that
-wait exceeds one hour or the client cannot wait, normal failure handling
-resumes. A response already sent to the client is never replayed.
+the provider editor's Advanced section. It defaults to 50 extra attempts;
+`crazy-retry-count=1..100` changes the limit; `0` restores the default.
+Each request keeps a separate budget per provider. Retries wait 100 ms,
+even when the vendor's Retry-After is longer. A response already sent to
+the client is never replayed.
+
+**Error recovery cooldown.** The provider editor's Advanced section and
+`magpie provider set <id> error-cooldown=15s` set a cooldown for final
+upstream 4xx and 5xx errors. `error-cooldown=off` keeps the original
+recovery policy. While cooling, a provider is not sent new requests and
+other candidates can answer immediately. This is separate from the 100 ms
+between Crazy Retry attempts.
 
 **When the safety filter refuses.** A reply the vendor's safety filter
 refuses before any of it is said rests nobody: it is about what was asked,

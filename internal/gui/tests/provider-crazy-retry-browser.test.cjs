@@ -47,7 +47,7 @@ async function open(browser, kind, lang, cleanup) {
     if (url.pathname === "/api/provider/save") {
       const body = route.request().postDataJSON();
       posts.push(body);
-      Object.assign(state.providers[0], { crazyRetry: body.crazyRetry, crazyRetryCount: body.crazyRetryCount || 20 });
+      Object.assign(state.providers[0], { crazyRetry: body.crazyRetry, crazyRetryCount: body.crazyRetryCount || 50, errorCooldownSeconds: body.errorCooldownSeconds });
       return json(state);
     }
     if (url.pathname.startsWith("/api/")) return json({});
@@ -86,7 +86,13 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
         if (!words.I18N) vm.runInNewContext(await fs.readFile(path.join(assets, "i18n.js"), "utf8") + "\nthis.I18N=I18N;", words);
         const { page, posts, errors, edit, controls } = await open(browser, kind, lang, cleanup);
         let editor = await edit(), { toggle, count, save } = controls(editor);
-        assert.equal(await count.inputValue(), "20");
+        const cooldown = editor.locator(".error-cooldown");
+        assert.equal(await cooldown.inputValue(), "0");
+        assert.equal(await cooldown.isDisabled(), false);
+        assert.equal(await cooldown.getAttribute("min"), "0");
+        assert.equal(await cooldown.getAttribute("max"), "3600");
+        await cooldown.fill("15");
+        assert.equal(await count.inputValue(), "50");
         assert.equal(await toggle.isChecked(), false);
         assert.equal(await count.isDisabled(), true);
         await toggle.check();
@@ -95,10 +101,12 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
         await editor.waitFor({ state: "detached" });
         assert.equal(posts[0].crazyRetry, true);
         assert.equal(posts[0].crazyRetryCount, 7);
+        assert.equal(posts[0].errorCooldownSeconds, 15);
         editor = await edit();
         ({ toggle, count, save } = controls(editor));
         assert.equal(await toggle.isChecked(), true);
         assert.equal(await count.inputValue(), "7");
+        assert.equal(await cooldown.inputValue(), "15");
         await toggle.uncheck();
         await save.click();
         await editor.waitFor({ state: "detached" });
@@ -123,7 +131,7 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
         assert.equal(posts[2].crazyRetryCount, 0, "a genuinely empty field uses the default");
         editor = await edit();
         ({ count, save } = controls(editor));
-        assert.equal(await count.inputValue(), "20");
+        assert.equal(await count.inputValue(), "50");
         for (const value of ["1", "100", "0"]) {
           await count.fill(value);
           await save.click();
@@ -131,7 +139,31 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
           assert.equal(posts.at(-1).crazyRetryCount, Number(value));
           editor = await edit();
           ({ count, save } = controls(editor));
-          assert.equal(await count.inputValue(), value === "0" ? "20" : value);
+          assert.equal(await count.inputValue(), value === "0" ? "50" : value);
+        }
+        if (lang === "en") {
+          const saved = posts.length;
+          for (const invalid of ["-1", "1.5", "3601"]) {
+            await cooldown.fill(invalid);
+            await save.click();
+            assert.equal(posts.length, saved);
+            assert.equal(await cooldown.evaluate((element) => document.activeElement === element), true);
+            assert.match(await editor.locator(".editor-error").innerText(), /\S/);
+          }
+          await cooldown.fill("");
+          await cooldown.pressSequentially("1e");
+          assert.deepEqual(await cooldown.evaluate((element) => ({ value: element.value, bad: element.validity.badInput })), { value: "", bad: true });
+          await save.click();
+          assert.equal(posts.length, saved);
+          for (const value of ["", "1", "3600", "0"]) {
+            await cooldown.fill(value);
+            await save.click();
+            await editor.waitFor({ state: "detached" });
+            assert.equal(posts.at(-1).errorCooldownSeconds, Number(value));
+            editor = await edit();
+            ({ save } = controls(editor));
+            assert.equal(await cooldown.inputValue(), String(Number(value)));
+          }
         }
         assert.deepEqual(errors, []);
       });

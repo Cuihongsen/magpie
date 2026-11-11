@@ -23,13 +23,23 @@ fallback, compaction and invalid counters.
 
 An enabled provider's `crazyRetry` retries a 429 on that provider before
 falling back. The per-request provider budget counts additional attempts,
-defaults to 20, and is configurable from 1 to 100. It holds each reply
+defaults to 50, and is configurable from 1 to 100. It holds each reply
 until a retry is safe, stops on cancellation, and does not replay content
-already passed to the client. It waits at least 100 milliseconds between
-attempts, or longer when requested by the upstream's rate-limit headers;
-when the explicit wait is longer than an hour or the client cannot wait,
-it continues through the usual failure and fallback path. Once the budget
-is exhausted, the native short retry and patience loops do not extend it.
+already passed to the client. It waits 100 milliseconds between attempts,
+including when the upstream requests a longer Retry-After. If the client
+cannot wait, normal failure handling resumes. Once the budget is
+exhausted, the native short retry and patience loops do not extend it.
+
+An optional provider `errorCooldownSeconds` puts the whole provider aside
+for that many seconds after its final upstream 4xx or 5xx response. Other
+providers are tried without waiting; a sole resting provider is not sent
+another request before its cooldown expires. Client cancellation does not
+start a cooldown or replay content already delivered. Request corrections
+such as combined-token recovery still happen before the final failure.
+On a 400 saying "no healthy deployments", when no other candidate remains,
+the provider is retried twice at the configured cooldown interval. An
+exhausted retry returns 503. Crazy retries on 429 use their own 100 ms
+interval first; the configured provider cooldown starts once they stop.
 
 This page covers how a request is routed. Plugins that change requests and
 replies are in [Gateway middleware](gateway-middleware.md). Subscriptions

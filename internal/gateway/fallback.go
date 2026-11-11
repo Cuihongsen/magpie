@@ -1209,6 +1209,15 @@ func probeOne(cs []candidate) []candidate {
 // group weighs nothing by them, and a reading that finds them full no
 // more is what brings it back (renewed).
 func restingOf(c candidate) (Rest, bool) {
+	if c.p.ErrorCooldownSeconds > 0 {
+		if rest, ok := errorCooldownOf(c.p.ID); ok {
+			return rest, true
+		}
+		if rest, ok := restOf(c.restID()); ok && rest.Why == failSlow {
+			return rest, true
+		}
+		return Rest{}, false
+	}
 	r, ok := restOf(c.restKey())
 	if !ok && c.restID() != c.restKey() {
 		r, ok = restOf(c.restID())

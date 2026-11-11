@@ -2787,6 +2787,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	again := 0     // times the last one left has been tried again
 	crazyRetries := map[string]int{}
 	crazyStopped := map[string]Try{}
+	unavailableRetries := map[string]int{}
 	resealed := 0    // what of the conversation another account sealed was taken out: its reasoning, then its compaction
 	repicked := 0    // times Copilot's Auto was asked again for a model the account is served
 	floored := false // the reply's length raised to what the provider takes
@@ -2893,8 +2894,31 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// handed the request on, written once the next try begins
 	var failedRow func()
 	var lastReply *holdWriter
+	cooldownRejected := false
+	rejectCooldown := func(c candidate, rest Rest) {
+		call.Status, call.Error, call.Provider = http.StatusServiceUnavailable, c.p.Name+": recovering from an upstream error", c.p.ID
+		call.To, call.Usage = "", Usage{}
+		cooldownRejected = true
+		if !kept.sent {
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int((time.Until(rest.Until)+time.Second-1)/time.Second))))
+		}
+		failTo(w, kept, from, call.Status, call.Error)
+	}
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
+		if c.p.ErrorCooldownSeconds > 0 {
+			if rest, cooling := errorCooldownOf(c.p.ID); cooling {
+				if i < len(cands)-1 {
+					continue
+				}
+				if lastReply != nil {
+					lastReply.release()
+				} else {
+					rejectCooldown(c, rest)
+				}
+				break
+			}
+		}
 		if _, stopped := crazyStopped[c.p.ID]; stopped {
 			if i < len(cands)-1 {
 				continue
@@ -2972,7 +2996,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// for its allowance running out to be told as that one's error
 		// and once the agent has the stream's headers from an earlier try's
 		// keepalives, for a failure to be told as the stream's error
-		hw := newHoldWriter(w, !last || c.p.CrazyRetryLimit() > 0 || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2 ||
+		hw := newHoldWriter(w, !last || c.p.CrazyRetryLimit() > 0 || c.p.ErrorCooldownSeconds > 0 || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2 ||
 			patience > 0 && rounds < replanRounds && (waitFrom.IsZero() || time.Since(waitFrom) < patience) || wantWhole)
 		// a compaction's summary is held to its end, for a cut or an
 		// error halfway to go to the next candidate (#2274)
@@ -3255,7 +3279,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		var heldBack time.Time // when the first of those held out of their allowance is back
 		var queued int64       // ms it waited for a slot of its key's or account's
 		var laneErr error      // turned away by its key's or account's queue
-		at := &wireAt{}        // the level a translated request was built at
+		cooldownAttempt := &errorCooldownAttempt{provider: c.p.ID}
+		at := &wireAt{} // the level a translated request was built at
 		// the models Copilot's Auto picked for it, where from, and which
 		// were refused (#256)
 		autoPicked := func() []provider.AutoPick { return nil }
@@ -3283,7 +3308,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// a stream that fails before anything is said is let go at
 			// once (hw.stop), not read on until the vendor hangs up
 			ctx, stop := context.WithCancel(withWireAt(r.Context(), at))
-			if isGroup {
+			if isGroup || c.p.ErrorCooldownSeconds > 0 {
 				ctx = groupTry(ctx)
 			}
 			if ownFast {
@@ -3316,6 +3341,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// with the try's own, to the agent if it is the one it gets
 			// (#4145)
 			ctx = withReplySink(ctx, c.p.ID, hw.heardUpstream)
+			if c.p.ErrorCooldownSeconds > 0 {
+				ctx = context.WithValue(ctx, errorCooldownAttemptKey{}, cooldownAttempt)
+			}
 			if from != provider.Responses {
 				// the reasoning its calls carry that this one refused
 				// earlier in the conversation isn't sent to be refused
@@ -3390,6 +3418,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var tooMany *errRPM
 			if errors.Is(err, errQueueFull) || errors.Is(err, errQueueWait) || errors.As(err, &tooMany) {
 				laneErr = err
+			}
+			if err == nil && ctx.Err() == nil && c.p.ErrorCooldownSeconds > 0 {
+				if rest, cooling := errorCooldownOf(c.p.ID); cooling {
+					release()
+					stop()
+					s.trace.update(tr, func(t *Route) { t.Tries = t.Tries[:len(t.Tries)-1] })
+					cands = append(cands[:i+1:i+1], errorCooldownRemaining(cands[i+1:], c.p.ID)...)
+					if i < len(cands)-1 {
+						skipped = append(skipped, c.label()+": recovering from an upstream error")
+						continue
+					}
+					rejectCooldown(c, rest)
+					break
+				}
 			}
 			if err == nil {
 				if queued > 0 {
@@ -3755,6 +3797,51 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					i--
 					continue
 				}
+			}
+		}
+		cooldownStatus, cooldownBody, upstreamFailed := cooldownAttempt.failed(hw.code(), hw.errBody())
+		if c.p.ErrorCooldownSeconds > 0 && !held && call.To != "" && r.Context().Err() == nil && upstreamFailed {
+			rest := errorCooldownAfter(c, cooldownStatus, cooldownBody, time.Now())
+			try.Fail, try.Rest = rest.Why, &rest
+			if hw.passing || hw.code() == http.StatusRequestEntityTooLarge || overflowed(hw.code(), hw.errBody()) {
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			} else {
+				cands = append(cands[:i+1:i+1], errorCooldownRemaining(cands[i+1:], c.p.ID)...)
+				last = i == len(cands)-1
+				unavailable := hw.code() == http.StatusBadRequest && bytes.Contains(bytes.ToLower(hw.errBody()), []byte("no healthy deployments"))
+				if unavailable && i == len(cands)-1 && unavailableRetries[c.p.ID] < 2 && hw.mayAskAgain() {
+					wait := time.Duration(c.p.ErrorCooldownSeconds) * time.Second
+					if !kept.tooQuiet(wait) {
+						unavailableRetries[c.p.ID]++
+						try.Again = wait.Milliseconds()
+						s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+						skipped = append(skipped, c.label()+": "+call.Error)
+						if pauseAlive(r.Context(), w, kept, streams, start, wait) {
+							i--
+							continue
+						}
+						call.Status, call.Error = canceled(r.Context())
+						try.Status, try.Error, try.Fail, try.Gone = call.Status, call.Error, failCanceled, true
+						s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+						break
+					}
+				}
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				if i < len(cands)-1 {
+					if other == nil {
+						other = &Try{Status: call.Status, Error: call.Error}
+					}
+					skipped = append(skipped, c.label()+": "+call.Error)
+					continue
+				}
+				if unavailable && unavailableRetries[c.p.ID] >= 2 {
+					call.Status = http.StatusServiceUnavailable
+					call.Error = c.p.Name + ": model temporarily unavailable after recovery attempts"
+					failTo(w, kept, from, call.Status, call.Error)
+					break
+				}
+				hw.release()
+				break
 			}
 		}
 		if hw.failed() && hw.refused {
@@ -4467,7 +4554,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// refused one before any of it was said (#248): the account
 				// is at fault no more for it, and nobody rests
 				try.Fail = failRefused
-			} else if lateRests(call.Error) {
+			} else if lateRests(call.Error) && (try.Rest == nil || try.Rest.By != "error-cooldown") {
 				rest := s.restAfter(c, call.Status, hw.header, []byte(call.Error))
 				try.Fail, try.Rest = rest.Why, &rest
 			}
@@ -4584,6 +4671,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	call.Route = tr.ID
 	call.Masked = s.trace.maskedOf(tr)
 	s.record(call)
+	if cooldownRejected {
+		logged()
+	}
 	if call.To != "" {
 		rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent, Via: call.Via, Provider: call.Provider, Host: where, Model: model,
 			ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
@@ -4960,6 +5050,7 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 
 // forwardOnce is one request to the provider, as forward makes it.
 func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
+	observeErrorCooldownReply(ctx, p.ID, nil, nil)
 	ctx = s.metered(p.Via(ctx), p, "")
 	body = deepseekToolPatterns(p, to, body)
 	body = grokToolPatterns(p, to, body)
@@ -5218,21 +5309,26 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// sent plain, ChatGPT answered a 1.1 MB one 503 (ylorn on X)
 		sent = provider.CodexCompressed(req, body)
 	}
-	res, err := p.Do(s.client, req)
+	send := func(request *http.Request) (*http.Response, error) {
+		response, err := p.Do(s.client, request)
+		observeErrorCooldownReply(ctx, p.ID, response, err)
+		return response, err
+	}
+	res, err := send(req)
 	if err == nil && res.StatusCode >= 400 && provider.OpenCodeURL(req.URL.String()) {
 		logOpenCodeRefusal(p, req, res.StatusCode)
 	}
 	if err == nil && to == provider.Anthropic {
 		// a vendor that takes the key in x-api-key or Authorization
 		// alone, refusing both (Aloha on Discord): asked again with one
-		res, err = provider.RetryOneAuth(p, req, res, func(r *http.Request) (*http.Response, error) { return p.Do(s.client, r) })
+		res, err = provider.RetryOneAuth(p, req, res, send)
 	}
 	if err == nil && to == provider.Chat {
 		// a GLM Coding Plan's key at Zhipu's or Z.ai's pay-as-you-go
 		// endpoint, refused there for want of a balance (1113): asked at
 		// the plan's endpoint, and the provider moved there when it serves
 		// it; else the refusal says what to change (@cleverpigo on X)
-		res, err = provider.RetryZhipuCoding(p, req, res, func(r *http.Request) (*http.Response, error) { return p.Do(s.client, r) })
+		res, err = provider.RetryZhipuCoding(p, req, res, send)
 	}
 	if err != nil {
 		return res, err

@@ -25,7 +25,7 @@ func TestCrazyRetryProviderBeforeFallback(t *testing.T) {
 	}{
 		{name: "disabled", config: `{}`, failures: 3, wantFirst: 1, wantSecond: 1},
 		{name: "recovers", config: `{"crazyRetry":true}`, failures: 3, wantFirst: 4},
-		{name: "default limit", config: `{"crazyRetry":true}`, failures: 30, wantFirst: 21, wantSecond: 1},
+		{name: "default limit", config: `{"crazyRetry":true}`, failures: 60, wantFirst: 51, wantSecond: 1},
 		{name: "configured limit", config: `{"crazyRetry":true,"crazyRetryCount":2}`, failures: 8, wantFirst: 3, wantSecond: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestCrazyRetryCancellationWhileWaiting(t *testing.T) {
 	}
 }
 
-func TestCrazyRetryWaitRespectsRetryAfter(t *testing.T) {
+func TestCrazyRetryWaitUsesHundredMilliseconds(t *testing.T) {
 	now := time.Now()
 	for _, test := range []struct {
 		header string
@@ -153,10 +153,11 @@ func TestCrazyRetryWaitRespectsRetryAfter(t *testing.T) {
 	}{
 		{header: "", want: 100 * time.Millisecond, ok: true},
 		{header: "0.05", want: 100 * time.Millisecond, ok: true},
-		{header: "0.25", want: 250 * time.Millisecond, ok: true},
-		{header: "3", want: 3 * time.Second, ok: true},
-		{header: now.Add(2 * time.Hour).UTC().Format(http.TimeFormat), ok: false},
-		{header: "7200", ok: false},
+		{header: "0.25", want: 100 * time.Millisecond, ok: true},
+		{header: "1", want: 100 * time.Millisecond, ok: true},
+		{header: "3", want: 100 * time.Millisecond, ok: true},
+		{header: now.Add(2 * time.Hour).UTC().Format(http.TimeFormat), want: 100 * time.Millisecond, ok: true},
+		{header: "7200", want: 100 * time.Millisecond, ok: true},
 	} {
 		wait, ok := crazyRetryWait(http.Header{"Retry-After": {test.header}}, now)
 		if wait != test.want || ok != test.ok {
@@ -329,8 +330,8 @@ func TestCrazyRetryStoppedLastPreservesFailure(t *testing.T) {
 		retryAfter string
 		wantCalls  int
 	}{
-		{name: "direct final response", retryAfter: "7200", wantCalls: 1},
-		{name: "stopped final response", withSmall: true, retryAfter: "7200", wantCalls: 1},
+		{name: "direct final response", retryAfter: "7200", wantCalls: 3},
+		{name: "stopped final response", withSmall: true, retryAfter: "7200", wantCalls: 3},
 		{name: "exhausted final response", withSmall: true, wantCalls: 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {

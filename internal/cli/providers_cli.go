@@ -58,8 +58,10 @@ const providerUsage = `usage:
                                           (at most 4m); patience=off hands the agent the error at once;
                                           patience=default, 1m
                                           crazy-retry=on|off enables Crazy Retry (default off);
-                                          crazy-retry-count=0..100 sets its retry count (0 restores default 20),
-                                          kept while off; show displays 20 when the count is unset
+                                          crazy-retry-count=0..100 sets its retry count (0 restores default 50),
+                                          kept while off; show displays 50 when the count is unset
+                                          error-cooldown=15s sets the recovery time for upstream 4xx/5xx
+                                          to 1..3600 whole seconds; off (the default) keeps the original logic
   magpie provider key <id> <key>          change the API key
   magpie provider icon <id> <file|name>   give a custom provider a picture (PNG, JPEG, SVG…) or a built-in icon
   magpie provider fallback <id> <provider/model>…   where requests go when it's out of quota or down (none clears)
@@ -865,6 +867,11 @@ func showProvider(p provider.Provider) error {
 		retryCount = provider.DefaultCrazyRetryCount
 	}
 	kv("crazy-retry-count", strconv.Itoa(retryCount))
+	cooldown := "off"
+	if p.ErrorCooldownSeconds > 0 {
+		cooldown = strconv.Itoa(p.ErrorCooldownSeconds) + "s"
+	}
+	kv("error-cooldown", cooldown)
 	if p.Searches {
 		kv("search", "by itself"+muted.Render("  a client's web search goes to it as sent"))
 	}
@@ -1202,6 +1209,12 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 				return fmt.Errorf("crazy-retry-count=0..%d (0 restores default %d)", provider.MaxCrazyRetryCount, provider.DefaultCrazyRetryCount)
 			}
 			p.CrazyRetryCount = count
+		case "error-cooldown":
+			seconds, err := errorCooldownArg(v)
+			if err != nil {
+				return err
+			}
+			p.ErrorCooldownSeconds = seconds
 		case "user-agent", "ua":
 			// agent: a request goes with the User-Agent the agent that
 			// sent it gave, for a coding plan that serves only agents it
@@ -2255,4 +2268,16 @@ func patienceArg(v string) (int, error) {
 		return 0, fmt.Errorf("patience is at most %s, not %q", provider.PatienceLongest*time.Second, v)
 	}
 	return int((d + time.Second - 1) / time.Second), nil
+}
+
+func errorCooldownArg(value string) (int, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "off" {
+		return 0, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < time.Second || duration > time.Duration(provider.MaxErrorCooldownSeconds)*time.Second || duration%time.Second != 0 {
+		return 0, fmt.Errorf("error-cooldown=off|<1..%d whole seconds, e.g. 15s>", provider.MaxErrorCooldownSeconds)
+	}
+	return int(duration / time.Second), nil
 }

@@ -49,7 +49,7 @@ func TestProviderEditorCrazyRetry(t *testing.T) {
 	}
 	const edit = `{"id":"relay","name":"Relay","chat":"http://127.0.0.1:1/v1","models":[],"headers":{}`
 	post(edit + `,"new":true,"key":"test-key"}`)
-	check("relay", false, 20)
+	check("relay", false, 50)
 	for _, step := range []struct {
 		fields string
 		on     bool
@@ -59,7 +59,7 @@ func TestProviderEditorCrazyRetry(t *testing.T) {
 		{"", true, 7},
 		{`,"crazyRetry":false`, false, 7},
 		{`,"crazyRetryCount":1`, false, 1},
-		{`,"crazyRetry":true,"crazyRetryCount":0`, true, 20},
+		{`,"crazyRetry":true,"crazyRetryCount":0`, true, 50},
 		{`,"crazyRetryCount":100`, true, 100},
 		{`,"crazyRetry":false,"crazyRetryCount":20`, false, 20},
 	} {
@@ -83,7 +83,7 @@ func TestProviderCopyCrazyRetryInheritance(t *testing.T) {
 	}{
 		{"omitted", "", true, 7},
 		{"explicit off", `,"crazyRetry":false`, false, 7},
-		{"explicit default", `,"crazyRetryCount":0`, true, 20},
+		{"explicit default", `,"crazyRetryCount":0`, true, 50},
 		{"explicit off and default", `,"crazyRetry":false,"crazyRetryCount":0`, false, 0},
 		{"explicit settings", `,"crazyRetry":true,"crazyRetryCount":9`, true, 9},
 	} {

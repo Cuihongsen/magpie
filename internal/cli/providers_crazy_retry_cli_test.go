@@ -23,16 +23,17 @@ func TestProviderCrazyRetryCLI(t *testing.T) {
 		count       string
 		storedCount int
 	}{
-		{nil, "off", "20", 0},
-		{[]string{"crazy-retry=on"}, "on", "20", 20},
+		{nil, "off", "50", 0},
+		{[]string{"crazy-retry=on"}, "on", "50", 50},
 		{[]string{"crazy-retry-count=1"}, "on", "1", 1},
 		{[]string{"crazy-retry-count=100"}, "on", "100", 100},
 		{[]string{"crazy-retry=off"}, "off", "100", 100},
 		{[]string{"crazy-retry-count=7"}, "off", "7", 7},
-		{[]string{"crazy-retry-count=0"}, "off", "20", 0},
-		{[]string{"crazy-retry=on"}, "on", "20", 20},
+		{[]string{"crazy-retry-count=0"}, "off", "50", 0},
+		{[]string{"crazy-retry=on"}, "on", "50", 50},
 		{[]string{"crazy-retry-count=7"}, "on", "7", 7},
-		{[]string{"crazy-retry-count=0"}, "on", "20", 20},
+		{[]string{"crazy-retry-count=0"}, "on", "50", 50},
+		{[]string{"crazy-retry-count=20"}, "on", "20", 20},
 	} {
 		if test.pairs != nil {
 			out, err := printed(t, func() error {

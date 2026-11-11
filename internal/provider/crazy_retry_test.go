@@ -43,7 +43,8 @@ func TestCrazyRetrySavedAndLoaded(t *testing.T) {
 		count  int
 	}{
 		{"legacy", "", false, 0},
-		{"default", `,"crazyRetry":true`, true, 20},
+		{"default", `,"crazyRetry":true`, true, 50},
+		{"explicit 20", `,"crazyRetry":true,"crazyRetryCount":20`, true, 20},
 		{"minimum", `,"crazyRetry":true,"crazyRetryCount":1`, true, 1},
 		{"maximum", `,"crazyRetry":true,"crazyRetryCount":100`, true, 100},
 		{"disabled keeps count", `,"crazyRetryCount":7`, false, 7},
@@ -87,7 +88,7 @@ func TestCrazyRetryReadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCrazyRetry(t, *p, true, 20)
+	assertCrazyRetry(t, *p, true, 50)
 }
 
 func TestCrazyRetryRefusesInvalidCountsWithoutWriting(t *testing.T) {
@@ -133,12 +134,13 @@ func TestCrazyRetryLimit(t *testing.T) {
 	}{
 		{false, 0, 0},
 		{false, 7, 0},
-		{true, 0, 20},
+		{true, 0, 50},
 		{true, 1, 1},
 		{true, 7, 7},
+		{true, 20, 20},
 		{true, 100, 100},
-		{true, -1, 20},
-		{true, 101, 20},
+		{true, -1, 50},
+		{true, 101, 50},
 	} {
 		p := Provider{CrazyRetry: test.on, CrazyRetryCount: test.count}
 		limit := p.CrazyRetryLimit()

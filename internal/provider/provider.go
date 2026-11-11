@@ -46,6 +46,8 @@ const (
 // Protocols in the order magpie prefers them when it has to translate.
 var Protocols = []Protocol{Chat, Responses, Anthropic}
 
+const MaxErrorCooldownSeconds = 3600
+
 // Provider is one configured vendor.
 type Provider struct {
 	ID   string `json:"id"`
@@ -221,7 +223,8 @@ type Provider struct {
 	// failure and 30 for a rate limit. The vendor's own "try again in"
 	// still stands over it. RestCapOff (-1): no rest at all after a
 	// failure that says nothing of why, a rate limit's as the gateway's own.
-	RestCap int `json:"restCap,omitempty"`
+	RestCap              int `json:"restCap,omitempty"`
+	ErrorCooldownSeconds int `json:"errorCooldownSeconds,omitempty"`
 	// LimitRestOff keeps its keys and accounts asked when the vendor says
 	// they are out of quota or answers 429 (zoecats on Discord: a local
 	// aggregator says "quota exhausted" for a moment while it switches
@@ -888,6 +891,7 @@ func accountSettings(a, pk Provider) Provider {
 	// how long its accounts rest out of quota, and the most they rest
 	// while they keep failing (#2008); or not at all for a limit
 	a.QuotaRest, a.QuotaResetAt, a.RestCap, a.LimitRestOff = pk.QuotaRest, pk.QuotaResetAt, pk.RestCap, pk.LimitRestOff
+	a.ErrorCooldownSeconds = pk.ErrorCooldownSeconds
 	// what it bills against the official price (#819): an account's editor
 	// sets it as a key provider's does (PaulT on Discord, Codex)
 	a.PriceRate = pk.PriceRate
@@ -988,6 +992,9 @@ func Slug(name string) string {
 
 // Save adds or replaces a provider.
 func Save(p Provider) error {
+	if p.ErrorCooldownSeconds < 0 || p.ErrorCooldownSeconds > MaxErrorCooldownSeconds {
+		return fmt.Errorf("error cooldown must be 0..%d seconds (0 keeps the original recovery logic)", MaxErrorCooldownSeconds)
+	}
 	if p.CrazyRetryCount < 0 || p.CrazyRetryCount > MaxCrazyRetryCount {
 		return fmt.Errorf("crazy retry count must be 1..%d (0 leaves it unset)", MaxCrazyRetryCount)
 	}
@@ -1482,6 +1489,9 @@ func ownNetwork(hostport string) bool {
 func normalize(p Provider) Provider {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	p.Name = strings.TrimSpace(p.Name)
+	if p.ErrorCooldownSeconds < 0 || p.ErrorCooldownSeconds > MaxErrorCooldownSeconds {
+		p.ErrorCooldownSeconds = 0
+	}
 	if p.CrazyRetryCount < 0 || p.CrazyRetryCount > MaxCrazyRetryCount {
 		p.CrazyRetryCount = 0
 	}

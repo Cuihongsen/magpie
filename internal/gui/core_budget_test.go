@@ -46,8 +46,8 @@ func TestCoreScriptBudget(t *testing.T) {
 	if n < 5 {
 		t.Fatalf("found only %d core scripts in index.html", n)
 	}
-	const accountRetryBudget = coreScriptBudget + 171
-	if total > accountRetryBudget {
-		t.Errorf("the core's scripts are %d bytes, over their budget of %d: put the page's code in its plugin, or raise the budget and say why", total, accountRetryBudget)
+	const editorBudget = coreScriptBudget + 171 + 1047
+	if total > editorBudget {
+		t.Errorf("the core's scripts are %d bytes, over their budget of %d: put the page's code in its plugin, or raise the budget and say why", total, editorBudget)
 	}
 }

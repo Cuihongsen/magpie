@@ -123,9 +123,10 @@ type providerJSON struct {
 	TakesInsecureTLS bool `json:"takesInsecureTLS"`
 	// asked as usual after a quota refusal or a 429, never set aside for
 	// it (provider.LimitRestOff)
-	LimitRestOff    bool `json:"limitRestOff"`
-	CrazyRetry      bool `json:"crazyRetry"`
-	CrazyRetryCount int  `json:"crazyRetryCount"`
+	LimitRestOff         bool `json:"limitRestOff"`
+	CrazyRetry           bool `json:"crazyRetry"`
+	CrazyRetryCount      int  `json:"crazyRetryCount"`
+	ErrorCooldownSeconds int  `json:"errorCooldownSeconds"`
 	// Codex's compaction asked of it as Codex sent it, its sealed item
 	// back as it came (provider.NativeCompaction, #1099); CarriesCompaction: its
 	// wire can carry it, so the editor offers it
@@ -682,7 +683,8 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
 		CrazyRetry: p.CrazyRetry, CrazyRetryCount: p.CrazyRetryCount,
-		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
+		ErrorCooldownSeconds: p.ErrorCooldownSeconds,
+		Fallback:             p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate,
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
 		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
@@ -1349,9 +1351,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			InsecureTLS *bool `json:"insecureTLS"`
 			// LimitRestOff is whether a quota refusal or a 429 leaves it
 			// asked as usual; a save that leaves it out keeps it
-			LimitRestOff    *bool `json:"limitRestOff"`
-			CrazyRetry      *bool `json:"crazyRetry"`
-			CrazyRetryCount *int  `json:"crazyRetryCount"`
+			LimitRestOff         *bool `json:"limitRestOff"`
+			CrazyRetry           *bool `json:"crazyRetry"`
+			CrazyRetryCount      *int  `json:"crazyRetryCount"`
+			ErrorCooldownSeconds *int  `json:"errorCooldownSeconds"`
 			// MaxConcurrency is how many requests each of its keys or
 			// accounts has out at once: a number (0 none), null for what
 			// its plugin says or none; a save that leaves it out keeps it
@@ -1583,6 +1586,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 		case "save":
+			if req.ErrorCooldownSeconds != nil && (*req.ErrorCooldownSeconds < 0 || *req.ErrorCooldownSeconds > provider.MaxErrorCooldownSeconds) {
+				fail(rw, fmt.Errorf("error recovery cooldown must be a whole number from 0 to 3600 seconds"))
+				return
+			}
 			// a preset needs nothing but the key; a saved provider keeps
 			// its key when the form left it blank
 			if pr, err := provider.FromPreset(in.Preset); err == nil && in.Chat == "" && in.Responses == "" && in.Anthropic == "" && in.Gemini == "" {
@@ -1711,7 +1718,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if req.New {
 				// a second one of a preset, or a name already in use, is
 				// added beside the first under the next free id
-				if req.CopyOf != "" && (req.CrazyRetry == nil || req.CrazyRetryCount == nil) {
+				if req.CopyOf != "" && (req.CrazyRetry == nil || req.CrazyRetryCount == nil || req.ErrorCooldownSeconds == nil) {
 					source, err := provider.Find(req.CopyOf)
 					if err != nil {
 						fail(rw, err)
@@ -1722,6 +1729,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					}
 					if req.CrazyRetryCount == nil {
 						in.CrazyRetryCount = source.CrazyRetryCount
+					}
+					if req.ErrorCooldownSeconds == nil {
+						in.ErrorCooldownSeconds = source.ErrorCooldownSeconds
 					}
 				}
 				if req.Proxy != nil {
@@ -1738,6 +1748,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				if req.CrazyRetryCount != nil {
 					in.CrazyRetryCount = *req.CrazyRetryCount
+				}
+				if req.ErrorCooldownSeconds != nil {
+					in.ErrorCooldownSeconds = *req.ErrorCooldownSeconds
 				}
 				add := provider.Add
 				if req.CopyOf != "" {
@@ -1785,6 +1798,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.CrazyRetryCount = *req.CrazyRetryCount
 				} else if old != nil {
 					in.CrazyRetryCount = old.CrazyRetryCount
+				}
+				if req.ErrorCooldownSeconds != nil {
+					in.ErrorCooldownSeconds = *req.ErrorCooldownSeconds
+				} else if old != nil {
+					in.ErrorCooldownSeconds = old.ErrorCooldownSeconds
 				}
 				if keepCC && old != nil {
 					in.MaxConcurrency = old.MaxConcurrency
