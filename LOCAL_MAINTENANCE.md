@@ -2,7 +2,7 @@
 
 本目录基于官方 `v0.1.2697`，提交
 `1747559d02c1e03a6f38dc8506b75e545ee4b89a`。
-已部署维护版本为 `0.1.2697-crazy-retry100ms`。定制源码维护于
+已部署维护版本为 `0.1.2697-native-cooldown15-retry100`。定制源码维护于
 `Cuihongsen/magpie` 的 `codex/local-customizations-v2697` 分支，
 官方 `yetone/magpie` 为上游。
 
@@ -35,12 +35,25 @@
 本机隔离假上游实测两次重试间隔约 102 毫秒；定向 race 和原有
 combined-token 恢复验证通过。
 
-后续源码增加渠道级 `errorCooldownSeconds`，并按照用户最新要求把疯狂
+当前版本增加渠道级 `errorCooldownSeconds`，并按照用户最新要求把疯狂
 重试固定为 100 毫秒，不再让上游 Retry-After 或重置头延长同次重试。
 渠道级恢复冷却与单次请求内重试分开；配置为 15 秒时，上游最终 4xx
 或 5xx 后渠道暂停派发 15 秒，其他可用渠道无需等待。原先本机 37491
 转发器处理 `no healthy deployments` 的恢复逻辑在网关中实现，并沿用
 配置的恢复冷却。取消与已发出的内容不能被重放。
+
+2026-11-11 已将签名后的当前版本安装至 `/Applications/magpie.app`，
+二进制 SHA-256 为
+`8fa6efbad653eb1d3e891b8b4ea6cf154303b2d15359627088fc663f534d5de2`。
+Token Maxing 的渠道配置使用上游直连、15 秒错误恢复冷却，并保留原有
+20 次疯狂重试设置；未配置次数时默认 50 次。旧 `37491` 转发器已在
+连接排空后停止并禁用，其 launchd 配置和程序保留。旧 App 和渠道配置
+备份位于 `~/.local/share/magpie-sub2api/backup-native-cooldown-20261111-190356`。
+签名包隔离拨测中，429 后的两次实际发包间隔为 103.045 和 103.086 毫秒，
+15 秒冷却及到期恢复、无健康部署恢复和 combined-token 修复均通过。
+真实 Token Maxing 的一次短请求在六次 429 后返回 200。四个相关 Go 包的
+定向 race、五语言 Node 测试及 Chromium/WebKit 各 15 项测试通过；
+未将这些定向结果称为全量测试通过。
 
 ## 行为
 
