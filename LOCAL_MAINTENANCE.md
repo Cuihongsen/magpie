@@ -55,6 +55,47 @@ Token Maxing 的渠道配置使用上游直连、15 秒错误恢复冷却，并�
 定向 race、五语言 Node 测试及 Chromium/WebKit 各 15 项测试通过；
 未将这些定向结果称为全量测试通过。
 
+## 官方上游合并
+
+2026-11-13 把官方稳定版从 `v0.1.2697` 合并到 `v0.1.3939`。区间共
+1755 个提交、4077 个文件变更（+468297/−20500），分两次合并提交：
+先 `v0.1.3909`（`d7837f49e`），再 `v0.1.3939`。上游主要更新了
+网关兼容（WebSocket、mTLS、Gemini/Vertex、图像/视频、web_search 参数、
+更多 OpenAI 兼容端点）、Agent 接入（Codex `-p magpie`、Claude 思考模式、
+Hermes、FlowDown、Bob、Mistral Vibe、JetBrains/WSL）、Provider 与账户
+（管理 API、Remote Magpie、余额探测、按 key/账户的模型与配额、证书与
+掩码策略）、路由与用量（路由模板、服务层级、配额卡、请求用量游标、
+速度排行、积分窗口）、MCP/插件/Skill/Library（多账户 MCP、Skill 路由、
+Library 目标、插件搜索），以及 Memory、会话导航、备份同步、更新源选择、
+构建 attestation 校验和问题报告。
+
+合并时保留全部本地定制，并按上游新 API 做了适配：
+
+- 渠道 `crazyRetry`（默认 50 次、Token Maxing 显式 20 次），同一请求内
+  重试间隔固定约 100 毫秒，不再被 `Retry-After` 或重置头延长。
+- 渠道 `errorCooldownSeconds`，Token Maxing 为 15 秒；上游最终
+  401/其他 4xx/5xx 后渠道冷却，取消或已输出内容不重放。
+- combined input/output 上限的本地恢复逻辑，改用上游 `lazyre`。
+- Token Maxing 直连 `https://thsmaxtoken.myhexin.com/ai-gateway/v1`；
+  旧 `127.0.0.1:37491` 转发器保持停用。
+- Codex 的 DeepSeek 仍为 480K 窗口、400K 压缩阈值。
+
+合并后的验证：Gateway 定向 111 项、Provider/CLI/GUI 定向 33 项、
+Node/i18n 14 项、`coreScriptBudget` 通过；`node --check` 两个静态资源
+通过；`make build` 成功（仅有 CoreML 可用性警告和重复 `-lobjc` 链接
+警告）。本轮未运行全量 `go test ./...`，不声称全量通过。
+
+本机 `Go 1.26.8` 工具链位于 `GOMODCACHE` 内，`footprint-overlay.sh`
+会因此被 Go 拒绝；构建时使用复制到 `~/sdk/go1.26.8` 的独立
+`GOROOT`，即
+`GOROOT=$HOME/sdk/go1.26.8 PATH=$HOME/sdk/go1.26.8/bin:$PATH GOTOOLCHAIN=local make build`。
+
+本次只合并源码并推送个人 fork，没有生成新签名 App、没有替换
+`/Applications/magpie.app`，已安装版本仍是
+`0.1.2697-native-cooldown15-retry100`。分支
+`codex-local-customizations-v2697` 已推送到 `Cuihongsen/magpie`，
+未在本轮新增 tag。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output

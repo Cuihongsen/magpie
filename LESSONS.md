@@ -589,6 +589,20 @@ Two habits from them:
   (a36319d60), and TestCursorEditorCopiedOncePerChange's 100ms linger
   (2efb71ea0).
 
+**A test that breaks a shared file puts its bytes back, and its cleanup
+checks the write.**
+- ea3dee96a (10-16) had TestFetchPrivateEntries write "{not json" to the
+  gateway package's shared settings.json and restore it with
+  `t.Cleanup(func() { settings.Save(was) })`. Save refuses to write over
+  a file it can't parse, and the cleanup dropped the error, so the
+  broken file waited for the next test that saved settings without
+  fresh(t). TestRemoteMagpieAskedToFollow went red on ubuntu CI at
+  836d074f1 (11-12), and the two tests run alone were red every time.
+  aa744b9ed writes back the bytes it read, and reports a failed write.
+- A cleanup that goes through the code under test inherits its guards.
+  Restore with the bytes read before, or give the test its own HOME.
+- Seen 1× (2026-11-13).
+
 **A value put in a request's context lives as long as anything that
 holds the context, a stopped timer included.**
 - #5250: TestSocketTurnBodiesFreed kept 1 of 12 turn bodies in full
@@ -914,6 +928,22 @@ is read back before the push.**
   `>|`, and check `git log -1 --format=%s` against the diff before
   pushing.
 - Seen 2× (2026-10-15, 2026-11-12).
+
+**A commit's `--stat` names only the files its change touched; any other
+file is a stale tree taking out someone's work.**
+- 85e6ec540 (11-11, the Paseo agent) was committed on a stale index and
+  took out the six commits before it; b52c71114 restored them.
+- 76ceff87c (11-12, Usage's hours back) was built on an older base. Its
+  tree dropped 7c37424fc (Linux without backdrop blur) and d6b5f24db
+  (Codex seats of one name) with their two GUI tests, the
+  history_tallies test and the gui-shell doc line: 156 lines out under a
+  usage subject. 8097860ab put them back from d6b5f24db. Its body ran
+  usage-hours "at the rebased head", which the dropped tests weren't in.
+- Before pushing, `git show --stat HEAD` against the subject: a file the
+  change never meant to touch, or a test file going out, is a stop.
+  Rebase or cherry-pick onto origin/main; never commit a tree copied
+  from an older checkout.
+- Seen 2× (2026-11-11, 2026-11-12).
 
 **A community PR that changes how a page looks is not merged on review
 alone.**

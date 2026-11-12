@@ -156,7 +156,18 @@ function archivePanel(name, id, redraw) {
 // is kept for the next time the page opens; picked days are not, as they
 // go stale.
 const PERIODS = [["today", "Today"], ["last:24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All"]];
-try { const v = localStorage.getItem("magpie.usagePeriod"); if (PERIODS.some(([id]) => id === v)) period = v; } catch {}
+// Hours of the reader's own (eachg0 on X): the last N hours, up to now, so
+// yesterday needn't be dug out of the calendar each time the date rolls
+// over. The range menu sets N; the pick and N are kept on this device.
+const HOURS_MAX = 720;
+function periodHours(p) {
+  const m = /^last:(\d+)h$/.exec(p || "");
+  const n = m ? +m[1] : 0;
+  return n >= 1 && n <= HOURS_MAX ? n : 0;
+}
+const keptPeriod = (id) => PERIODS.some(([p]) => p === id) || periodHours(id) > 0;
+const hoursName = (n) => (n === 1 ? t("Last hour") : t("Last {n} hours", { n }));
+try { const v = localStorage.getItem("magpie.usagePeriod"); if (keptPeriod(v)) period = v; } catch {}
 
 // The reader's time zone, which magpie reads the period's days, the chart's
 // hours and a picked day in: magpie web may be read from another zone than
@@ -233,18 +244,20 @@ function renderPeriod(loading) {
   // days of the reader's own (#1492): the last opt names them once picked,
   // and opens the range menu to pick them, or others
   const range = periodDays(period);
-  const b = el("button", "opt range-opt" + (range ? " on" : ""));
+  // hours other than the 24 the preset has name the same chip
+  const hours = PERIODS.some(([id]) => id === period) ? 0 : periodHours(period);
+  const b = el("button", "opt range-opt" + (range || hours ? " on" : ""));
   b.type = "button";
   b.disabled = !!loading;
   b.setAttribute("aria-haspopup", "dialog");
   b.setAttribute("aria-expanded", "false");
-  b.setAttribute("aria-label", range ? t("Days picked: {days}", { days: rangeName(range) }) : t("Pick days"));
-  b.append(svg("M3 4.5h10v8.5H3zM3 7h10M5.5 3v3M10.5 3v3", 12, 1.4), el("span", "", range ? rangeName(range) : t("Custom")));
+  b.setAttribute("aria-label", hours ? t("Hours picked: {hours}", { hours: hoursName(hours) }) : range ? t("Days picked: {days}", { days: rangeName(range) }) : t("Pick days"));
+  b.append(svg("M3 4.5h10v8.5H3zM3 7h10M5.5 3v3M10.5 3v3", 12, 1.4), el("span", "", hours ? hoursName(hours) : range ? rangeName(range) : t("Custom")));
   if (range) b.title = t("Days picked: {days}", { days: rangeName(range) });
   b.onclick = () => {
     if (b.classList.contains("open")) return closeProtoMenu();
     // on a phone the strip is hidden behind the head's menu, which opens it
-    openRangeMenu(b.offsetParent ? b : $("#usageRangeMenu"), range, (from, to) => {
+    openRangeMenu(b.offsetParent ? b : $("#usageRangeMenu"), range, hours, (from, to) => {
       const picked = periodDays(from + ".." + to);
       for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b);
       b.lastChild.textContent = rangeName(picked);
@@ -252,6 +265,11 @@ function renderPeriod(loading) {
       b.setAttribute("aria-label", b.title);
       slide(seg, "period");
       pickPeriod(from + ".." + to);
+    }, (n) => {
+      for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b);
+      b.lastChild.textContent = hoursName(n);
+      slide(seg, "period");
+      pickPeriod("last:" + n + "h");
     });
   };
   seg.append(b);
@@ -293,7 +311,7 @@ function renderPeriod(loading) {
 
 function pickPeriod(id) {
   period = id; ledDay = ""; ledOffset = 0;
-  if (PERIODS.some(([p]) => p === id)) try { localStorage.setItem("magpie.usagePeriod", id); } catch {}
+  if (keptPeriod(id)) try { localStorage.setItem("magpie.usagePeriod", id); } catch {}
   loadUsage().catch((e) => status(e.message, "err"));
 }
 
@@ -347,13 +365,16 @@ async function readsNote(host) {
 // noCallsIn is what an empty page says of the period it is on
 function noCallsIn(p) {
   if (periodDays(p)) return "No calls on the days picked.";
+  if (periodHours(p) && p !== "last:24h") return periodHours(p) === 1 ? "No calls in the last hour." : "No calls in the last {n} hours.";
   return { today: "No calls today.", "last:24h": "No calls in the last 24 hours.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[p] || "No calls yet.";
 }
 
 // openRangeMenu is the app's own menu for picking days (#1492): a few
 // spans a click away, and a month to pick the first day on, then the last.
 // Days after today can't be picked. choose gets the two days, in order.
-function openRangeMenu(anchor, current, choose) {
+// hours is the last N hours the page is on, 0 when it is not; chooseHours
+// gets N from the row at the menu's top.
+function openRangeMenu(anchor, current, hours, choose, chooseHours) {
   closeProtoMenu();
   const today = dayKeyOf(new Date());
   let start = null; // the first day clicked, waiting for the last
@@ -381,6 +402,25 @@ function openRangeMenu(anchor, current, choose) {
     b.onclick = (e) => { e.stopPropagation(); closeProtoMenu(); choose(r.from, r.to); };
     quick.append(b);
   }
+  // the last N hours, up to now: N is kept on this device
+  const lastH = el("label", "rm-times rm-hours");
+  const hin = el("input", "rm-time");
+  let keptH = 0;
+  try { keptH = periodHours("last:" + localStorage.getItem("magpie.usageHours") + "h"); } catch {}
+  Object.assign(hin, { type: "text", inputMode: "numeric", maxLength: 3, placeholder: "24", value: String(hours || keptH || ""), spellcheck: false, autocomplete: "off" });
+  hin.setAttribute("aria-label", t("hours back"));
+  hin.oninput = () => hin.removeAttribute("aria-invalid");
+  hin.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const n = periodHours("last:" + hin.value.trim() + "h");
+    if (!n) return hin.setAttribute("aria-invalid", "true");
+    try { localStorage.setItem("magpie.usageHours", String(n)); } catch {}
+    closeProtoMenu();
+    chooseHours(n);
+  };
+  lastH.append(svg("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2 1.3", 12, 1.4), hin, el("span", "rm-dash", t("hours back")));
   const nav = el("div", "rm-nav");
   const prev = el("button", "rm-step"), next = el("button", "rm-step"), month = el("span", "rm-month");
   prev.type = next.type = "button";
@@ -422,6 +462,7 @@ function openRangeMenu(anchor, current, choose) {
     return true;
   };
   box.append(head, quick, nav, grid, times);
+  if (chooseHours) head.after(lastH);
   const draw = (focusDay) => {
     head.textContent = start ? t("Now the last day") : t("Pick the first day, then the last");
     month.textContent = shown.toLocaleDateString(intlLang(), { year: "numeric", month: "long" });
@@ -774,7 +815,7 @@ function renderUsage() {
   if (empty) {
     stats.classList.add("empty");
     const none = noCallsIn(period);
-    stats.append(el("div", "none", t(none) + " " + t("Calls through the gateway and the calls Claude Code's and Codex's own session files record are counted here, with no provider set up.")));
+    stats.append(el("div", "none", t(none, { n: periodHours(period) }) + " " + t("Calls through the gateway and the calls Claude Code's and Codex's own session files record are counted here, with no provider set up.")));
     readsNote(stats);
     $("#usageNote").textContent = "";
     $("#usageClear").hidden = true;
@@ -1163,7 +1204,52 @@ const cardPeeked = (q) => !!usagePeek && (trayCardID(q) === usagePeek || q.provi
 function overviewCards(list) {
   const hid = hiddenCards();
   list = sharedBalances(list);
-  return hid.size ? list.filter((q) => !hid.has(cardHideKey(q)) || cardPeeked(q)) : list;
+  list = hid.size ? list.filter((q) => !hid.has(cardHideKey(q)) || cardPeeked(q)) : list;
+  return list.map(withoutHiddenRows);
+}
+// A card's quota rows can be hidden one by one (wangshaowei39 on X:
+// Antigravity's Claude & GPT rows unwanted), by provider and row group, a
+// pool's or family's name else the window's (windowGroup), in
+// settings.usageWindowsHidden, every account of the provider alike. Only
+// the Overview's copy loses them; a card is never left with none.
+const windowGroup = (w) => w.pool || w.family || w.name;
+const windowHideKey = (q, g) => q.provider + "|" + g;
+const hiddenRows = () => new Set(state.settings?.usageWindowsHidden || []);
+function withoutHiddenRows(q) {
+  const hid = hiddenRows();
+  if (!hid.size || q.error || !q.windows?.length) return q;
+  const ws = q.windows.filter((w) => !hid.has(windowHideKey(q, windowGroup(w))));
+  return ws.length && ws.length < q.windows.length ? { ...q, windows: ws } : q;
+}
+// hiddenRowList: the rows the Overview leaves out, one a provider and group,
+// those of a card with every row named showing again excepted
+function hiddenRowList() {
+  const hid = hiddenRows(), out = [], seen = new Set();
+  if (!hid.size) return out;
+  for (const q of quotas || []) {
+    if (q.error || !q.windows?.length) continue;
+    const gone = q.windows.filter((w) => hid.has(windowHideKey(q, windowGroup(w))));
+    if (gone.length === q.windows.length) continue;
+    for (const w of gone) {
+      const key = windowHideKey(q, windowGroup(w));
+      if (!seen.has(key)) { seen.add(key); out.push({ key, q, group: windowGroup(w) }); }
+    }
+  }
+  return out;
+}
+// quotaRowMenuItems: Hide for the row under the pointer, else for each row
+// of the card, when it has more than one
+function quotaRowMenuItems(card, target, of) {
+  const q = of[0];
+  const groups = [...new Set((q.windows || []).map(windowGroup))];
+  if (q.error || groups.length < 2) return [];
+  // the row under the pointer, told by its name: a pool's window is named
+  // "Pool · 5 hours", a family's and a model's by their own
+  const row = target?.closest?.(".quota");
+  const name = row && card.contains(row) && row.querySelector(".quota-name")?.textContent;
+  const own = name && [...familyWindows(q.windows), ...q.windows].find((w) => t(w.name) === name);
+  const pick = own ? [windowGroup(own)] : groups;
+  return pick.map((g, i) => ({ name: t("Hide {name} from Overview", { name: t(g) }), literal: true, icon: EYE_OFF, sep: i === 0, run: () => hideQuotaRows([windowHideKey(q, g)], true) }));
 }
 // quotaCardMenus gives a card its menu: a right-click, the keyboard's menu
 // key on its handle, or on a touch screen a long press (iOS Safari sends
@@ -1222,12 +1308,14 @@ function quotaCardMenu(target, card, subs, from) {
   // a card shown though hidden, a menu bar cell having asked for it
   // (usagePeek): its way back, not Hide again
   const hid = hiddenCards(), peeked = of.flatMap(cardHideKeys).filter((k) => hid.has(k));
-  const others = hiddenQuotas().length;
+  const others = hiddenQuotas().length + hiddenRowList().length;
+  const rows = peeked.length ? [] : quotaRowMenuItems(card, target, of);
   openRowMenu(anchor, [
     ...(peeked.length ? [{ name: "Show in Overview", icon: EYE, run: () => hideQuotaCards(peeked, false) }]
       : [{ name: who && subs.length > 1 ? "Hide this account from Overview" : "Hide from Overview", icon: EYE_OFF, run: () => hideQuotaCards(of.flatMap(cardHideKeys), true) }]),
     // a plan's card showing its key's balance: the balance alone
     ...(one?.balanceCard && !peeked.length ? [{ name: "Hide its balance from Overview", icon: EYE_OFF, run: () => hideQuotaCards([one.balanceCard + "|balance"], true) }] : []),
+    ...rows,
     // the ones hidden already, from the menu that hid them
     ...(others ? [{ name: t("Show {n} Hidden", { n: others }), literal: true, icon: EYE, sep: true, run: (e) => openHidden(e, "quotaHid", () => { quotaHidOpen = true; renderQuotaHid(); }) }] : []),
   ]);
@@ -1241,7 +1329,8 @@ function hiddenQuotas() {
 // opening them, each with Unhide, and Show all
 function renderQuotaHid() {
   const hb = $("#quotaHid");
-  const hidden = hiddenQuotas();
+  const cards = hiddenQuotas(), rowList = hiddenRowList();
+  const hidden = [...cards, ...rowList];
   hb.hidden = !hidden.length;
   if (!hidden.length) { quotaHidOpen = false; return; }
   const line = hb.querySelector(".us-hidline"), hl = hb.querySelector(".list");
@@ -1253,7 +1342,7 @@ function renderQuotaHid() {
   }
   all.textContent = t("Show all");
   all.hidden = !quotaHidOpen || hidden.length < 2;
-  all.onclick = () => hideQuotaCards(hidden.map(cardHideKey), false);
+  all.onclick = () => { if (cards.length) hideQuotaCards(cards.map(cardHideKey), false); if (rowList.length) hideQuotaRows(rowList.map((r) => r.key), false); };
   line.replaceChildren(el("span", "", t("{n} hidden", { n: hidden.length })), svg(CHEV, 11, 1.6));
   line.title = t("Hidden from the Overview only: they are still used and counted. Click to see them.");
   line.setAttribute("aria-expanded", String(quotaHidOpen));
@@ -1261,7 +1350,7 @@ function renderQuotaHid() {
   hl.hidden = !quotaHidOpen;
   hl.replaceChildren();
   if (!quotaHidOpen) return;
-  for (const q of hidden) {
+  for (const q of cards) {
     const r = el("div", "row stat hid acts");
     r.dataset.id = cardHideKey(q);
     r.append(icon(q.icon));
@@ -1272,6 +1361,40 @@ function renderQuotaHid() {
     b.onclick = (e) => { e.stopPropagation(); hideQuotaCards([cardHideKey(q)], false); };
     r.append(who, b);
     hl.append(r);
+  }
+  for (const { key, q, group } of rowList) {
+    const r = el("div", "row stat hid acts");
+    r.dataset.id = key;
+    r.append(icon(q.icon));
+    const who = el("div", "who");
+    who.append(el("div", "name", quotaName(q)), el("div", "sub", t(group)));
+    const b = el("button", "text us-unhide", t("Unhide"));
+    b.type = "button";
+    b.onclick = (e) => { e.stopPropagation(); hideQuotaRows([key], false); };
+    r.append(who, b);
+    hl.append(r);
+  }
+}
+// hideQuotaRows hides a card's rows from the Overview, or has them back:
+// drawn at once, put back if the save fails
+async function hideQuotaRows(keys, hide) {
+  const prev = state.settings || {};
+  const cur = (prev.usageWindowsHidden || []).filter((k) => !keys.includes(k));
+  const windowsHidden = hide ? [...cur, ...keys] : cur;
+  state.settings = { ...prev, usageWindowsHidden: windowsHidden };
+  const again = () => {
+    renderQuotas();
+    const to = $("#quotaHid .us-hidline");
+    (hide && to && !to.closest("[hidden]") ? to : null)?.focus({ preventScroll: true });
+  };
+  again();
+  try {
+    const s = await api("usage/arrange", { windowsHidden });
+    state.settings = { ...state.settings, usageWindowsHidden: s.usageWindowsHidden || [] };
+  } catch (e) {
+    state.settings = prev;
+    again();
+    status(e.message, "err");
   }
 }
 // hideQuotaCards hides cards from the Overview, or has them back: drawn at
@@ -2928,7 +3051,7 @@ function renderLedger() {
     wrap.classList.add("none");
     const filtered = ledPurpose || ledDay || ledRoute || ledAgent || ledProvider || ledAccount || ledComputer || ledCallerKey || ledModel || ledVia || ledFailed || ledRetried || ledQuery.trim();
     const none = noCallsIn(period);
-    wrap.replaceChildren(el("div", "led-none", filtered ? t("No requests match these filters.") : t(none)));
+    wrap.replaceChildren(el("div", "led-none", filtered ? t("No requests match these filters.") : t(none, { n: periodHours(period) })));
     if (!filtered) readsNote(wrap.firstChild);
     ledFit();
     ledHScroll();
@@ -4785,7 +4908,7 @@ if (mode === "window" && params.get("view") === "usage") {
   if (tab === "requests" || tab === "usage") usageTab = tab;
   // a total in the menu bar opens the Overview at its period
   const per = params.get("period");
-  if (PERIODS.some(([id]) => id === per)) period = per;
+  if (keptPeriod(per)) period = per;
   quotaFocus = usageTab === "usage" ? (params.get("card") || params.get("provider") || "") : "";
   usagePeek = quotaFocus;
   quotaFocusUntil = performance.now() + 5000;

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -979,6 +980,9 @@ type priceIndex struct {
 	// canon and canonDashed are the price the vendor's own entries under a
 	// canonical id (bare, and dashed) give, nil where they disagree
 	canon, canonDashed map[string]*Price
+	// canonSnap is canonDashed with the canonical's snapshot date taken
+	// off (deepseek-v4.1-flash-1017 is deepseek-v4.1-flash)
+	canonSnap map[string]*Price
 }
 
 var priceIndexes struct {
@@ -998,13 +1002,13 @@ func priceIndexOf(all map[string]mdProvider, at int, pid string) *priceIndex {
 	if x, ok := priceIndexes.by[pid]; ok {
 		return x
 	}
-	x := &priceIndex{bare: map[string]string{}, dashed: map[string]string{}, canon: map[string]*Price{}, canonDashed: map[string]*Price{}}
+	x := &priceIndex{bare: map[string]string{}, dashed: map[string]string{}, canon: map[string]*Price{}, canonDashed: map[string]*Price{}, canonSnap: map[string]*Price{}}
 	first := func(by map[string]string, k, key string) {
 		if was, ok := by[k]; !ok || key < was {
 			by[k] = key
 		}
 	}
-	seen := map[*map[string]*Price]map[string]bool{&x.canon: {}, &x.canonDashed: {}}
+	seen := map[*map[string]*Price]map[string]bool{&x.canon: {}, &x.canonDashed: {}, &x.canonSnap: {}}
 	agree := func(by *map[string]*Price, k string, p *Price) {
 		if !seen[by][k] {
 			seen[by][k] = true
@@ -1027,6 +1031,9 @@ func priceIndexOf(all map[string]mdProvider, at int, pid string) *priceIndex {
 		c := bareID(m.Canonical)
 		agree(&x.canon, c, m.Cost)
 		agree(&x.canonDashed, dashed(c), m.Cost)
+		if sn := snapshotOf(dashed(c)); sn != dashed(c) {
+			agree(&x.canonSnap, sn, m.Cost)
+		}
 	}
 	priceIndexes.by[pid] = x
 	return x
@@ -1047,6 +1054,10 @@ func canonicallyPriced(all map[string]mdProvider, at int, providers []string, b 
 	for _, by := range []func(*priceIndex) (*Price, bool){
 		func(x *priceIndex) (*Price, bool) { p, ok := x.canon[b]; return p, ok },
 		func(x *priceIndex) (*Price, bool) { p, ok := x.canonDashed[dashed(b)]; return p, ok },
+		// and as the snapshot it is: models.dev says DeepSeek's deepseek-flash
+		// is deepseek/deepseek-v4.1-flash-1017, and the relays serve it as
+		// deepseek-v4.1-flash (Open Design's, Winnie7572 on X)
+		func(x *priceIndex) (*Price, bool) { p, ok := x.canonSnap[dashed(b)]; return p, ok },
 	} {
 		for _, pid := range providers {
 			if p, ok := by(priceIndexOf(all, at, pid)); ok && p != nil {
@@ -1167,6 +1178,14 @@ func makerPriced(all map[string]mdProvider, at int, prefer []string, id string) 
 	}
 	return Price{}, false
 }
+
+// mmddSnapshot is the date a vendor ends a snapshot's id with: -0813,
+// -1017 (month and day), -20261017 or -2026-10-17.
+var mmddSnapshot = regexp.MustCompile(`-(?:(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])|20[0-9]{2}(?:-?)(?:0[1-9]|1[0-2])(?:-?)(?:0[1-9]|[12][0-9]|3[01]))$`)
+
+// snapshotOf is an id without the date of its snapshot, as the model it is
+// a snapshot of: deepseek-v4.1-flash-1017 is deepseek-v4.1-flash.
+func snapshotOf(id string) string { return mmddSnapshot.ReplaceAllString(id, "") }
 
 // dashed is an id with its dots as dashes: the spelling two ids are compared
 // in when one vendor writes a model's version 4.6 and another 4-6.
@@ -1769,6 +1788,62 @@ func unmarked(b string) (string, int) {
 	return b[:i], int(n * float64(unit))
 }
 
+// NameWindow is the context window a model's name says it has, for a local
+// or custom model nothing else says a window of (maohy915 on X: a
+// "Qwen-3.8-27b-128k" he made himself): a last part of the id that is a
+// number and a unit alone, set apart by "-", "_" or " " from what comes
+// before it (or the last of an Ollama tag, "qwen:27b-128k"). k is 4 to 2048 thousand, m is 1, 2, 4, 5, 8 or 10 million, read
+// as the same 1,000 and 1,000,000 a "[200k]" mark is (a name that rounds up
+// never promises more than the model takes). Anything else is no window: a
+// model's size (27b, pythia-14m, smollm-135m), its version, a date
+// (gpt-4o-2024), a quant (q4_k_m), a lone "128k" with nothing before it.
+// It is the last resort: the user's own, the server's and models.dev's
+// windows are read before it.
+func NameWindow(id string) int {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if i := strings.LastIndexByte(id, '/'); i >= 0 {
+		id = id[i+1:]
+	}
+	// Ollama's "name:tag": the window is in the tag's last part
+	// ("qwen:27b-128k"), or in the name's when the tag is latest or only a
+	// size ("qwen3-128k:latest", "qwen3-128k:8b")
+	if name, tag, ok := strings.Cut(id, ":"); ok {
+		if n := nameWindow(tag); n > 0 {
+			return n
+		}
+		if tag == "latest" || strings.HasSuffix(tag, "b") && strings.Trim(tag[:len(tag)-1], "0123456789.") == "" {
+			return nameWindow(name)
+		}
+		return 0
+	}
+	return nameWindow(id)
+}
+
+// nameWindow is NameWindow of an id with no tag.
+func nameWindow(id string) int {
+	i := strings.LastIndexAny(id, "-_ ")
+	if i <= 0 || i+1 >= len(id) {
+		return 0
+	}
+	tail := id[i+1:]
+	unit := tail[len(tail)-1]
+	if unit != 'k' && unit != 'm' {
+		return 0
+	}
+	num := tail[:len(tail)-1]
+	if num == "" || len(num) > 4 || num[0] == '0' || strings.Trim(num, "0123456789") != "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(num)
+	switch {
+	case unit == 'k' && n >= 4 && n <= 2048:
+		return n * 1_000
+	case unit == 'm' && (n == 1 || n == 2 || n == 4 || n == 5 || n == 8 || n == 10):
+		return n * 1_000_000
+	}
+	return 0
+}
+
 // ListedBy is the reasoning levels the first of providers (models.dev
 // ids) listing a model of this id gives it — none, for one listed with a
 // thinking switch alone or nothing at all — and whether any of them says.
@@ -2125,7 +2200,7 @@ func DrawsID(id string) bool {
 // generators (Hy-Image-3.5-preview) draw on its images API too (#4913).
 func ImagesAPI(id string) bool {
 	id = strings.ToLower(id)
-	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream", "sensenova-u1", "hy-image"} {
+	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream", "sensenova-u1", "hy-image", "h3-image"} {
 		if strings.Contains(id, w) {
 			return true
 		}

@@ -112,7 +112,7 @@ func gatewaySession(g usage.GatewaySession) sessions.Session {
 }
 
 func sessionRoutes(mux *http.ServeMux, w Windows) {
-	warmSessions()
+	steadyGC()
 	mux.HandleFunc("GET /api/sessions", coldTurn(func(rw http.ResponseWriter, r *http.Request) {
 		// the list and the Codex threads' effort each list every session file
 		defer sessions.OneListing()()
@@ -416,9 +416,26 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	// is made here from the agent as detected (agentCommand), and the page
 	// sends only its id.
 	mux.HandleFunc("POST /api/agents/open", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ Agent string }
+		var in struct {
+			Agent string
+			// Terminal asks for the terminal even where the Open button
+			// opens the app (the row menu's Open in terminal)
+			Terminal bool
+		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
+			return
+		}
+		if in.Agent == "codex" && !in.Terminal && codexOpensApp() {
+			if isWeb(w) {
+				fail(rw, errors.New("opening an app is only for the desktop app"))
+				return
+			}
+			if err := codexAppOpener(r.Context()); err != nil {
+				fail(rw, err)
+				return
+			}
+			rw.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if !terminalHere() || isWeb(w) {
@@ -895,12 +912,18 @@ func withGatewaySessions(st sessions.Stats, days int, nativeKeys map[string]bool
 	return sessions.MergeExternalStats(st, daily, ext)
 }
 
-// warmSessions reads every session file once magpie is up, so the Sessions
-// page opens on the kept index and not on a first read of them all. Usage ›
-// Requests' whole history is read after it, not beside it on the disk: a
-// first All parsing 12k sessions kept that page a skeleton for 40 s.
-// Once a process: the app's page served to a browser (apppage.go) is a
-// second Handler beside the window's.
+// warmSessions reads every session file once the app's page is first
+// served, so the Sessions page opens on the kept index and not on a first
+// read of them all. Usage › Requests' whole history is read after it, not
+// beside it on the disk: a first All parsing 12k sessions kept that page a
+// skeleton for 40 s. Once a process: the app's page served to a browser
+// (apppage.go) is a second Handler beside the window's.
+//
+// Not at start: a magpie started at login, by `magpie tray` or as `magpie
+// web` with no page open read the history for nobody, ~0.6 s of CPU and a
+// rebuilt Requests index after an update, and what the reads kept went
+// two minutes later (statsIdle, requestIdle). The tray panel's page
+// doesn't start it: it shows neither page.
 func warmSessions() {
 	if testing.Testing() {
 		return
@@ -908,10 +931,24 @@ func warmSessions() {
 	warmOnce.Do(warmStart)
 }
 
-var warmOnce sync.Once
+var warmOnce, steadyOnce sync.Once
+
+// steadyGC is steadyGCStart, once a process and never in a test.
+func steadyGC() {
+	if testing.Testing() {
+		return
+	}
+	steadyOnce.Do(steadyGCStart)
+}
+
+// warmsSessions tells the app's page from the panel's and from the files
+// it loads: the page that starts warmSessions.
+func warmsSessions(r *http.Request) bool {
+	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/index.html") && r.URL.Query().Get("mode") != "panel"
+}
 
 func warmStart() {
-	steadyGCStart()
+	steadyGC()
 	go func() {
 		// a fresh install reads no agent's sessions until asked; one
 		// that read them before keeps reading them (decided once)
@@ -1189,6 +1226,20 @@ func agentCommand(a *agent.Agent) string {
 	}
 	return agentLine(a, launch, runtime.GOOS)
 }
+
+// codexOpensApp says whether Codex's Open button opens the desktop app:
+// the app where one is installed, unless the setting codexOpen asks for the
+// terminal (Yink88564391 on X).
+func codexOpensApp() bool {
+	return settings.Load().CodexOpen != "terminal" && codexAppInstalled()
+}
+
+// codexAppInstalled and codexAppOpener are the agent package's, vars so a
+// test doesn't open a real app.
+var (
+	codexAppInstalled = agent.CodexAppInstalled
+	codexAppOpener    = agent.OpenCodexApp
+)
 
 // agentLine is agentCommand with a's Launch already asked, for goos.
 func agentLine(a *agent.Agent, launch, goos string) string {

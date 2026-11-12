@@ -2985,6 +2985,58 @@ accounts is told its own calls alone: `/v1/magpie/usage` refuses it with a
 403, and `/v1/magpie/usage/requests` keeps only its rows, filter lists and
 share of the split by key.
 
+To keep a ledger of your own from those requests (rdsaltbo on X, #6060),
+read them as changes: `GET /v1/magpie/usage/requests?cursor=start&limit=500`
+answers `rows`, `deleted`, `next_cursor` and `has_more`; read again with
+`cursor=<next_cursor>` until `has_more` is `false`, keep the last
+`next_cursor`, and poll with it. `cursor=now` gives the cursor of this
+moment with no rows, to take only what comes after. Without `cursor` the
+offset and `limit` read above are unchanged.
+
+- **Rows** are upserts by `id`. The `id` (`u_…`) is made of what the record
+  itself says (when, whose, the ids below), never a token count, status,
+  model name or price, so it is the same on every read and after a restart
+  of magpie. A row magpie reads again with different figures (an agent's
+  file mends its tokens, an error arrives) comes again with the same `id` and
+  a higher `seq`: replace what you hold. `origin` says where the row is from:
+  `gateway`, `session` (read from the agent's own file; the gateway never
+  saw it), `reported` (`POST /v1/magpie/usage/requests`) or empty.
+  Every row is one request, never a session or model total: there is no
+  other granularity.
+- **Original ids** are under `original_ids`, each only when the source gave
+  it, and none is ever made up: `request_id` (the vendor's, or the one the
+  agent recorded), `response_id` (a response object the agent recorded),
+  `client_response_id` (the one the gateway sent its client, which can be
+  magpie's own when it translated the reply), `message_id` (the agent's own
+  message id, Claude Code's `msg_…`), `session_id` and `native_session_id`.
+  A missing key is a missing id. Use them to deduplicate against another
+  collector; use `id` to keep your own ledger idempotent. They are not
+  interchangeable.
+- **Deleted** are `{id, seq}` of rows that are no longer rows: a call read
+  from an agent's file that the gateway turned out to have served (its own
+  row, with another `id`, comes in `rows`), or one the user cleared. Drop
+  them from your ledger, so a call is never counted twice. Reading with
+  `cursor=start` lists the ledger as it is and no deleted ids.
+- **A cursor** is opaque and tied to this magpie's feed
+  (`usage-feed.jsonl` next to `usage.jsonl`), to the filters and key it was
+  given with, and to the moment it was given: a page that was not committed
+  is read again and gives the same rows, so rows may come twice and never
+  fail to come. The feed finds a change by reading the whole ledger again, a
+  call an agent's file brings late with an old time included, so `period`
+  and `day` have no say in it; `agent`, `provider`, `model`, `account`,
+  `callerKey`, `failed`, `retried`, `q`, `via` and `computer` narrow the rows
+  (the cursor still passes the rows they leave out). Deleted ids are kept 30
+  days. A cursor magpie can't resume from is refused, never answered with a
+  gap: `400 cursor_invalid`, `400 cursor_filter_changed` (read again with
+  `cursor=start` for new filters), `410 cursor_expired` (older than the
+  deleted ids kept) and `410 cursor_reset` (the feed was lost or replaced).
+  After a 410, read `cursor=start` and replace what you hold of the ledger.
+  A price change does not make a row new: `cost` is magpie's price at the time
+  of the read; keep the tokens, or the `cost` of a `reported` row.
+- A key held to a budget, models or accounts gets its own rows and its own
+  deleted ids, and a cursor given to another key is refused. `client_ip`
+  is left out, as in the offset mode.
+
 What is in flight now, for a status bar such as SketchyBar (#2132):
 `GET /v1/magpie/concurrency` answers `requests`, every agent request the
 gateway is working on, whether or not any limit is set (those waiting for a
@@ -3383,6 +3435,26 @@ v0.1.3862 on, release CI in `yetone/magpie-releases` signs each release's
 only. The private key is the `UPDATE_SIGNING_KEY` secret of
 `yetone/magpie-releases`, nowhere else. The public key is built into magpie
 (`internal/update/signed.go`).
+
+From v0.1.3891 the release workflow also attests every file with
+`actions/attest-build-provenance` (a SLSA provenance statement signed through
+Sigstore with the run's GitHub identity). Before downloading a file of such a
+release, the updater (`internal/update/attest.go`, sigstore-go) fetches the
+bundle for the file's signed SHA-256 from
+`api.github.com/repos/yetone/magpie-releases/attestations/sha256:<digest>` and
+checks it offline against the Sigstore trusted root embedded in the binary
+(`attest_root.json`, public-good instance): certificate chain, certificate
+timestamp, Rekor entry, issuer `token.actions.githubusercontent.com`, subject
+`release.yml` of `yetone/magpie-releases` on `main` or a `v*` tag, source
+repository `yetone/magpie-releases`, and the digest among the statement's
+subjects. This is in addition to the ed25519 check, never instead of it. A
+bundle that fails, or GitHub saying it has none (404, empty list), refuses the
+file. Anything that leaves it unknown (GitHub unreachable, rate limited, 5xx,
+not JSON, *Update source* set to the site alone) does not stop the update,
+since the signature has held; the log says the file went unattested. A
+`MAGPIE_UPDATE_FEED` of your own skips it. The embedded root must be renewed
+(`gh attestation trusted-root`, first line) when Sigstore rotates its public
+good keys; until then a new chain fails as "not attested".
 
 The feed hands the app that `SHA256SUMS` and signature (`signed`). The app
 checks the signature against its key, takes every file's SHA-256 from the
