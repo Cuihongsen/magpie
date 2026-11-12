@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"slices"
@@ -13,7 +14,7 @@ import (
 
 // generate_image and generate_video take the model to use (XYenon on
 // Discord): one of those set up for it, as provider/model, else the one
-// Settings › Images picks. The tool's schema lists those the caller may use
+// Settings › Models › Images picks. The tool's schema lists those the caller may use
 // (mediaModelsFor), and a model none of them is, is a tool error naming
 // them, never a drawing with another. The model chosen is named to the
 // images and videos APIs, so a gateway key's models hold it there as they
@@ -36,7 +37,7 @@ const mediaEnumMost = 40
 // first, and the default itself: "" when image generation is off or
 // nothing makes them. Image models are each provider's OfferedDrawers (one
 // the user unticked is left out, as Automatic leaves it), videos its
-// Videomakers.
+// OfferedVideomakers (one unticked left out the same way).
 func mediaModels(video bool) (all []string, def string) {
 	if video {
 		def, _ = videomaker()
@@ -51,7 +52,7 @@ func mediaModels(video bool) (all []string, def string) {
 		if !p.On() || p.DecideOnly() {
 			continue
 		}
-		ms := Videomakers(p)
+		ms := OfferedVideomakers(p)
 		if !video {
 			ms = OfferedDrawers(p)
 		}
@@ -64,12 +65,58 @@ func mediaModels(video bool) (all []string, def string) {
 	return all, def
 }
 
+// ImageModel is a model magpie draws with, as an agent's own list of
+// image models names it (Pi's, internal/agent/pi_extension.go).
+type ImageModel struct {
+	ID     string // provider/model, what /v1/images takes as model
+	Name   string // the model's name · its provider's, as /v1/models labels it
+	Images bool   // it takes images as input too
+}
+
+// ImageModels are the models generate_image may be asked for
+// (mediaModels), the Settings › Models › Images default first, each with its label;
+// none when image generation is off.
+func ImageModels() []ImageModel {
+	all, _ := mediaModels(false)
+	if len(all) == 0 {
+		return nil
+	}
+	known := map[string]ImageModel{}
+	for _, p := range provider.All() {
+		if !p.On() || p.DecideOnly() {
+			continue
+		}
+		// every drawer, so a default the user unticked is labelled too
+		for _, m := range Drawers(p) {
+			ref := p.ID + "/" + m.ID
+			known[ref] = ImageModel{ID: ref, Name: cmp.Or(m.Name, m.ID) + " · " + p.Name, Images: m.Images}
+		}
+	}
+	out := make([]ImageModel, 0, len(all))
+	for _, ref := range all {
+		m, ok := known[ref]
+		if !ok {
+			m = ImageModel{ID: ref, Name: ref}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // mediaModelsFor is mediaModels less those r's gateway key may not use.
 func mediaModelsFor(r *http.Request, video bool) (all, shown []string, def string) {
 	all, def = mediaModels(video)
-	who, held := keyHolds(r)
+	who, held := keyListHolds(r)
 	if !held {
-		return all, all, def
+		if !withGatewayKey(r) || !provider.GroupsBound() {
+			return all, all, def
+		}
+		for _, ref := range all { // less a group bound to other keys
+			if g, _, ok := provider.FindGroup(ref); !ok || !groupBarred(who, g) {
+				shown = append(shown, ref)
+			}
+		}
+		return all, shown, def
 	}
 	for _, ref := range all {
 		if refAllowed(who, ref) {
@@ -102,7 +149,7 @@ func mediaModelProp(video bool, shown []string, def string) map[string]any {
 	case video:
 		d += " Leave it out to use the video model set up in Magpie (now " + def + ")."
 	default:
-		d += " Leave it out to use the one set in Magpie (Settings → Images → Image generation; now " + def + ")."
+		d += " Leave it out to use the one set in Magpie (Settings → Models → Images → Image generation; now " + def + ")."
 	}
 	prop := map[string]any{"type": "string"}
 	switch n := len(shown); {
