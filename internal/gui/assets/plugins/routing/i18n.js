@@ -3,6 +3,8 @@
 magpie.strings({
   zh: {
     "Turn on Routing": "开启路由",
+    "In its hours now: {from}–{to} ({zone})": "当前在它的时段内：{from}–{to}（{zone}）",
+    "Outside its hours now: {from}–{to} ({zone}); requests skip it": "当前不在它的时段内：{from}–{to}（{zone}）；请求会跳过它",
     "Their page is on Routing, which is off": "它们的页面在路由里，而路由已关闭",
     "sign-in refused (answered since)": "登录曾被拒（之后已应答）",
     "Free first uses it before paid ones, and Cheapest first counts it as costing nothing": "免费优先会先用它再用付费的，最便宜优先把它算作不花钱",
@@ -750,6 +752,8 @@ magpie.strings({
   },
   "zh-TW": {
     "Turn on Routing": "開啟路由",
+    "In its hours now: {from}–{to} ({zone})": "目前在它的時段內：{from}–{to}（{zone}）",
+    "Outside its hours now: {from}–{to} ({zone}); requests skip it": "目前不在它的時段內：{from}–{to}（{zone}）；請求會跳過它",
     "Their page is on Routing, which is off": "它們的頁面在路由裡，而路由已關閉",
     "sign-in refused (answered since)": "登入曾被拒（之後已應答）",
     "Free first uses it before paid ones, and Cheapest first counts it as costing nothing": "免費優先會先用它再用付費的，最便宜優先把它算作不花錢",
@@ -1497,6 +1501,8 @@ magpie.strings({
   },
   ja: {
     "Turn on Routing": "ルーティングをオンにする",
+    "In its hours now: {from}–{to} ({zone})": "いまは稼働時間内です：{from}–{to}（{zone}）",
+    "Outside its hours now: {from}–{to} ({zone}); requests skip it": "いまは稼働時間外です：{from}–{to}（{zone}）。リクエストはこのメンバーを飛ばします",
     "Their page is on Routing, which is off": "ページはルーティングの中にあり、ルーティングはオフです",
     "sign-in refused (answered since)": "サインイン拒否（その後は応答あり）",
     "Free first uses it before paid ones, and Cheapest first counts it as costing nothing": "無料優先は有料より先にこれを使い、最安優先はこれを費用ゼロとして数えます",
@@ -2244,6 +2250,8 @@ magpie.strings({
   },
   de: {
     "Turn on Routing": "Weiterleitung einschalten",
+    "In its hours now: {from}–{to} ({zone})": "Jetzt in seinen Stunden: {from}–{to} ({zone})",
+    "Outside its hours now: {from}–{to} ({zone}); requests skip it": "Jetzt außerhalb seiner Stunden: {from}–{to} ({zone}); Anfragen überspringen es",
     "Their page is on Routing, which is off": "Ihre Seite liegt unter Weiterleitung, und die ist aus",
     "sign-in refused (answered since)": "Anmeldung abgelehnt (seitdem beantwortet)",
     "Free first uses it before paid ones, and Cheapest first counts it as costing nothing": "„Kostenlos zuerst“ nutzt es vor bezahlten, „Günstigste zuerst“ zählt es als kostenlos",

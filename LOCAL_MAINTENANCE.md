@@ -133,8 +133,16 @@ Node/i18n 14 项、`coreScriptBudget` 通过；`node --check` 两个静态资源
 首次保存时旧的 GUI 进程仍占着 `127.0.0.1:3430`，把 `windows` 丢了；结束
 旧进程后由新版重存成功。验证：provider 全包 2557 项、gateway 组相关
 488 项通过；17:02 对 `group/deepseek-v41-speed` 的实际路由候选只有
-`token-mixing/deepseek-v4.1-flash`，THS 已被窗口排除。Routing 页面暂不
-显示时间窗徽标，成员行仍按 `off` 显示。
+`token-mixing/deepseek-v4.1-flash`，THS 已被窗口排除。
+
+同日晚些时候把时间窗显示到 Routing 页面：`memberJSON.window` 带
+`from`/`to`/`days`/`zone`/`open`，组的卡片在成员名后括注
+`(22:00–08:00)`，编辑器成员行显示同一对时间并带悬停说明；当前不在窗口内
+时标为 amber。旧值仍只在 `providers.json` 和页面展示，编辑时间窗仍需改
+配置（页面只读显示）。已安装 `0.1.3939-window-ui`（SHA-256
+`901d52410193b40b6945b91678476087bd252cc6e2a0fb4f40e54637597f393d`），
+备份在 `backup-native-windows-20261113-173723`；迁移时旧 GUI 进程占着
+3430，最终以单一新实例重启（`open -a /Applications/magpie.app`）。
 
 ## 行为
 

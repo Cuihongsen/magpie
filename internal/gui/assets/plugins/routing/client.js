@@ -6955,7 +6955,10 @@ function routingPage(part) {
     }
     const manual = g.routing === "manual";
     const sep = g.routing === "order" ? " → " : " · ";
-    const mem = manual ? pickRow(g) : el("div", "mem", shownMembers(g).map((id) => memberLabel(g, id) + (g.off?.includes(id) ? ` (${t("off")})` : "")).join(sep));
+    const mem = manual ? pickRow(g) : el("div", "mem", shownMembers(g).map((id) => {
+      const w = (g.memberInfo || []).find((x) => x.id === id)?.window;
+      return memberLabel(g, id) + (g.off?.includes(id) ? ` (${t("off")})` : "") + (w ? ` (${w.from}–${w.to})` : "");
+    }).join(sep));
     main.append(mem);
     if (!g.decides) main.append(...groupQuota(g));
     for (const p of g.patterns || []) {
@@ -7427,6 +7430,17 @@ function routingPage(part) {
         sw.onclick = () => { d.off = off ? d.off.filter((x) => x !== id) : [...d.off, id]; draw(); };
         if (off) row.classList.add("muted");
         row.append(sw, memberHandle(id, i, row), memberIcon(id), n, el("span", "grow"));
+        // the hours the group sends it, from Group.Windows: a member
+        // outside them is skipped as one switched off is, and the row
+        // says which hours those are so nobody has to read the file
+        const win = info?.window;
+        if (win) {
+          const wt = el("small", "rt-window" + (win.open ? " on" : " off"), `${win.from}–${win.to}`);
+          wt.title = win.open
+            ? t("In its hours now: {from}–{to} ({zone})", { from: win.from, to: win.to, zone: win.zone || "" })
+            : t("Outside its hours now: {from}–{to} ({zone}); requests skip it", { from: win.from, to: win.to, zone: win.zone || "" });
+          row.append(wt);
+        }
         // what the model is, in the same chips the Gateway page's list says it
         // in (modelInfo): its reasoning levels, whether it sees images and the
         // window it holds. A group mixing members that see images with ones

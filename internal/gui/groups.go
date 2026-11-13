@@ -138,6 +138,16 @@ type classifierFailedJSON struct {
 	At    time.Time `json:"at"`
 }
 
+// windowJSON is the hours a group's member is sent requests, as
+// provider.Group.Windows keeps them, and whether now is in them.
+type windowJSON struct {
+	From string   `json:"from"`
+	To   string   `json:"to"`
+	Days []string `json:"days,omitempty"`
+	Zone string   `json:"zone,omitempty"`
+	Open bool     `json:"open"`
+}
+
 // classifierFailure is gateway.GroupClassifierFailure, which a test stands
 // in for
 var classifierFailure = gateway.GroupClassifierFailure
@@ -195,6 +205,9 @@ type memberJSON struct {
 	// (provider.FreeModel): its provider is the user's Free for me, or its
 	// vendor serves it free. The Routing page tags it (jiabubu on Discord)
 	Free bool `json:"free,omitempty"`
+	// Window: the hours the group sends it, and whether now is in them
+	// (Group.Windows); nil when it keeps none
+	Window *windowJSON `json:"window,omitempty"`
 }
 
 type modelRef struct {
@@ -445,6 +458,9 @@ func groupsState() groupsJSON {
 		ultraModels := sync.OnceValue(provider.UltraModels)
 		for _, id := range g.Members {
 			m := memberJSON{ID: id}
+			if w, ok := g.Windows[id]; ok {
+				m.Window = &windowJSON{From: w.From, To: w.To, Days: w.Days, Zone: w.Zone, Open: g.MemberOn(id, time.Now())}
+			}
 			if gid, ok := strings.CutPrefix(id, provider.GroupPrefix); ok {
 				// a group in the group: what agents see of it
 				m.Group = true

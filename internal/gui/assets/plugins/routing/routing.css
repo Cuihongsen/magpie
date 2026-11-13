@@ -626,6 +626,13 @@ button.rt-session { cursor: pointer; }
 .rt-gedit .fallback:not(.rt-rules) > .fbl:not(.sorting) > .fbrow > .n, .rt-gaccts > .fbrow > .n { user-select: text; -webkit-user-select: text; }
 .rt-group .rt-gnote { margin-top: 1px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-group .mem { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a member's hours (Group.Windows): the card and the editor say them,
+   amber when now is outside them and requests skip the member */
+.rt-group .mem .rt-window, .rt-gedit .fbrow .rt-window {
+  color: var(--muted); font-size: 11.5px; white-space: nowrap;
+}
+.rt-gedit .fbrow .rt-window { margin-left: 6px; }
+.rt-window.off { color: var(--amber); }
 /* a pattern the group finds models by, and how many it matches now */
 .rt-group .mem.pat code, .rt-pats code { font: var(--code-style, normal) 500 11px/1.5 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); }
 .rt-group .mem.pat.none, .rt-pats .fbrow.none small { color: var(--amber); }
