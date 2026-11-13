@@ -1,0 +1,120 @@
+name: Fork package
+
+# This fork's own packaging, on GitHub's runners alone: every push to the
+# customizations branch and every v* tag builds the macOS app (ad-hoc
+# signed, no Apple certificate here) and the cross-compiled CLI for every
+# target the Makefile names, and a tag publishes them on this fork's
+# Releases. Upstream's release.yml hands off to yetone/magpie-releases with
+# the upstream owner's token, so its jobs stand aside in a fork.
+
+on:
+  push:
+    branches: [codex-local-customizations-v2697]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: fork-package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: package (macOS arm64)
+    # macos-14 is Apple Silicon: the app is built natively, as the Makefile's
+    # cgo and the CoreML guard require.
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git describe names a branch build after the tag before it
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(git describe --tags --always | sed 's/^v//')"
+          fi
+          VERSION="$(printf '%s' "$VERSION" | tr -cd 'A-Za-z0-9._+-')"
+          [[ -n "$VERSION" ]] || VERSION="0.0.0-${GITHUB_SHA::8}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "building $VERSION from $GITHUB_SHA"
+
+      - name: Build the macOS app
+        run: make app VERSION="${{ steps.version.outputs.version }}"
+
+      # no Developer ID here, and no notarisation: the app runs on a Mac
+      # that trusts it once the quarantine flag is off (INSTALL.txt says so)
+      - name: Sign it for this computer (ad hoc)
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - magpie.app
+          codesign --verify --deep --strict magpie.app
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          mkdir -p out
+          ditto -c -k --sequesterRsrc --keepParent magpie.app "out/magpie-${V}-macos-arm64.zip"
+          hdiutil create -volname "magpie ${V}" -srcfolder magpie.app -ov -format UDZO \
+            "out/magpie-${V}-macos-arm64.dmg"
+          make release-cli VERSION="$V"
+          for f in dist/magpie-cli-*; do
+            base="$(basename "$f")"
+            base="${base#magpie-cli-}"
+            case "$base" in
+              *.exe) base="${base%.exe}" ;;
+            esac
+            zip -q -j "out/magpie-${V}-${base}.zip" "$f"
+          done
+          cat > out/INSTALL.txt <<EOF
+          magpie ${V} (fork build, macOS arm64 app + CLI)
+
+          macOS app: unzip magpie-${V}-macos-arm64.zip and put magpie.app in
+          /Applications. It is ad-hoc signed, not notarised: if macOS refuses
+          it, run
+
+            xattr -dr com.apple.quarantine /Applications/magpie.app
+
+          CLI: the magpie-${V}-<os>-<arch>.zip holds one binary named magpie
+          (magpie.exe on Windows). It is the terminal-only build, no GUI.
+          EOF
+          (cd out && shasum -a 256 * > SHA256SUMS.txt)
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magpie-${{ steps.version.outputs.version }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the tag's release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" out/* --clobber

@@ -144,6 +144,22 @@ Node/i18n 14 项、`coreScriptBudget` 通过；`node --check` 两个静态资源
 备份在 `backup-native-windows-20261113-173723`；迁移时旧 GUI 进程占着
 3430，最终以单一新实例重启（`open -a /Applications/magpie.app`）。
 
+## GitHub 自动打包
+
+`.github/workflows/fork-package.yml` 在个人 fork 上完成打包：推送到
+`codex-local-customizations-v2697` 或推 `v*` tag 时，在 `macos-14` 上
+`make app` 构建 macOS arm64 App、ad-hoc 签名，产出 zip、dmg 和
+`make release-cli` 的七个 CLI 目标 zip，附 `INSTALL.txt` 与
+`SHA256SUMS.txt`，作为 Actions artifact 保留 30 天；tag 构建还会用
+`gh release create/upload` 发布到该 fork 的 Releases。没有 Apple 开发者
+证书，App 未公证，下载后如被 Gatekeeper 拦截需
+`xattr -dr com.apple.quarantine /Applications/magpie.app`。
+
+官方 `release.yml`（移交 `yetone/magpie-releases`）和 `docker.yml`
+（推送 `ghcr.io/yetone/magpie`）在 fork 里没有对应密钥与命名空间，已加
+`github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
+`docker-stable` 本来就有这个守卫。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output

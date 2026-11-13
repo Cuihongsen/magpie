@@ -13,6 +13,9 @@ env:
 
 jobs:
   build:
+    # ghcr.io/yetone/magpie is the upstream owner's: a fork's tags are
+    # packaged by Fork package, not pushed as images nobody pulls.
+    if: github.repository == 'yetone/magpie'
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -99,7 +102,7 @@ jobs:
           retention-days: 1
 
   merge:
-    if: github.event_name != 'pull_request'
+    if: github.repository == 'yetone/magpie' && github.event_name != 'pull_request'
     needs: [build]
     runs-on: ubuntu-24.04
     permissions:
