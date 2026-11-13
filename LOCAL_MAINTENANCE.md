@@ -147,13 +147,18 @@ Node/i18n 14 项、`coreScriptBudget` 通过；`node --check` 两个静态资源
 ## GitHub 自动打包
 
 `.github/workflows/fork-package.yml` 在个人 fork 上完成打包：推送到
-`codex-local-customizations-v2697` 或推 `v*` tag 时，在 `macos-14` 上
-`make app` 构建 macOS arm64 App、ad-hoc 签名，产出 zip、dmg 和
-`make release-cli` 的七个 CLI 目标 zip，附 `INSTALL.txt` 与
-`SHA256SUMS.txt`，作为 Actions artifact 保留 30 天；tag 构建还会用
-`gh release create/upload` 发布到该 fork 的 Releases。没有 Apple 开发者
-证书，App 未公证，下载后如被 Gatekeeper 拦截需
+`codex-local-customizations-v2697` 或推 `v*` tag 时，在 `macos-latest`
+上 `make app` 构建 macOS Apple Silicon App、ad-hoc 签名，产出 zip
+（tag 另加 dmg）和 `INSTALL.txt`、`SHA256SUMS.txt`，作为 Actions
+artifact 保留 30 天；tag 构建还会用 `gh release create/upload` 发布到该
+fork 的 Releases。只做 M 系列安装包：不再构建 CLI 或其他平台。没有
+Apple 开发者证书，App 未公证，下载后如被 Gatekeeper 拦截需
 `xattr -dr com.apple.quarantine /Applications/magpie.app`。
+
+最初一版在 macOS runner 上串行交叉编译 7 个 CLI 目标并重复压缩上传，
+一次 16m47s。改为只构建 App、`compression-level: 0` 跳过重复压缩后，
+缓存命中时一次 1m48s（约 9.4 倍）；冷缓存主要耗在 Go+cgo 全量编译，
+Setup-go 的 module/build cache 会让后续推送走增量。
 
 官方 `release.yml`（移交 `yetone/magpie-releases`）和 `docker.yml`
 （推送 `ghcr.io/yetone/magpie`）在 fork 里没有对应密钥与命名空间，已加
