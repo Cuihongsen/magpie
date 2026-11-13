@@ -96,15 +96,10 @@ func (g Group) Picked() string {
 }
 
 // routes are the members requests to the group may go to now: a manual
-// group's pick alone, else every one not switched off.
+// group's pick alone, else every one not switched off and in its window
+// (Windows) now.
 func (g Group) routes() []string {
-	if g.Routing == Manual {
-		if p := g.Picked(); p != "" {
-			return []string{p}
-		}
-		return nil
-	}
-	return slices.DeleteFunc(slices.Clone(g.Members), g.IsOff)
+	return g.routesAt(time.Now())
 }
 
 // IsOff is whether the group's member id is switched off.
@@ -254,6 +249,13 @@ type Group struct {
 	// order, with their rules, but sent nothing until switched on again,
 	// so trying a group without one doesn't mean taking it out.
 	Off []string `json:"off,omitempty"`
+	// Windows are, for the members (as Members spells them) that keep
+	// hours, when they are sent requests: a TimeWindow's hours, days and
+	// zone, as a rule's pause holds by. A member outside its window is
+	// skipped as one switched off is, so a group hands its requests from
+	// one member to another by the clock; one not named here, and one
+	// whose window names no days, is sent them every day at those hours.
+	Windows map[string]TimeWindow `json:"windows,omitempty"`
 	// Pick is the member a Manual group sends every request to, as the
 	// user picked it on the group's card; "" is its first. It is kept
 	// while the group routes otherwise, for when it is manual again.
@@ -554,6 +556,11 @@ func cloneGroups(gs []Group) []Group {
 		g.Off, g.Levels, g.Fast, g.Ultra = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast), slices.Clone(g.Ultra)
 		g.Accounts, g.Seen, g.Keys = slices.Clone(g.Accounts), slices.Clone(g.Seen), slices.Clone(g.Keys)
 		g.Former = slices.Clone(g.Former)
+		g.Windows = maps.Clone(g.Windows)
+		for m, w := range g.Windows {
+			w.Days = slices.Clone(w.Days)
+			g.Windows[m] = w
+		}
 		g.Weights = maps.Clone(g.Weights)
 		g.EffortMaps = renamedEffortMaps(g.EffortMaps, func(m string) string { return m })
 		if g.IntentSure != nil {
@@ -658,6 +665,12 @@ func withoutRemoved(g Group, have map[string]bool) Group {
 	}
 	g.Members = kept
 	g.Off = slices.DeleteFunc(slices.Clone(g.Off), gone)
+	g.Windows = renamedWindows(g.Windows, func(m string) string {
+		if gone(m) {
+			return ""
+		}
+		return m
+	})
 	g.Fast = slices.DeleteFunc(slices.Clone(g.Fast), gone)
 	g.Ultra = slices.DeleteFunc(slices.Clone(g.Ultra), gone)
 	g.Weights = renamedWeights(g.Weights, func(m string) string {
@@ -1882,6 +1895,14 @@ func SaveGroup(g Group) error {
 	if err := cleanWeights(entries, &g); err != nil {
 		return err
 	}
+	if g.Windows == nil {
+		if i := slices.IndexFunc(f.Groups, func(x Group) bool { return x.ID == g.ID }); i >= 0 {
+			g.Windows = maps.Clone(f.Groups[i].Windows) // a caller that doesn't know of them
+		}
+	}
+	if err := cleanWindows(entries, &g); err != nil {
+		return err
+	}
 	if err := cleanEffortMaps(entries, &g); err != nil {
 		return err
 	}
@@ -2424,6 +2445,12 @@ func RenameGroup(from, to string) error {
 				f.Groups[i].Off[j] = now
 			}
 		}
+		f.Groups[i].Windows = renamedWindows(f.Groups[i].Windows, func(m string) string {
+			if m == old {
+				return now
+			}
+			return m
+		})
 		f.Groups[i].Weights = renamedWeights(f.Groups[i].Weights, func(m string) string {
 			if m == old {
 				return now

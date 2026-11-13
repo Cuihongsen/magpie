@@ -96,6 +96,46 @@ Node/i18n 14 项、`coreScriptBudget` 通过；`node --check` 两个静态资源
 `codex-local-customizations-v2697` 已推送到 `Cuihongsen/magpie`，
 未在本轮新增 tag。
 
+## 时段路由（原生时间窗）
+
+2026-11-13 把「哪个渠道在什么时段可用」做进网关本身，不再由 launchd
+定时改写 `providers.json`。`Group` 新增 `windows`：
+
+```json
+"windows": {
+  "token-mixing/deepseek-v4.1-flash": {"from": "16:00", "to": "08:00", "zone": "Asia/Shanghai"},
+  "ths/deepseek-v4.1-flash": {"from": "22:00", "to": "08:00", "zone": "Asia/Shanghai"}
+}
+```
+
+值就是规则暂停用的 `TimeWindow`（`from`/`to`/`days`/`zone`），因此跨午夜、
+按星期和按时区都与规则一致；不写 `days` 表示每天生效。解析在
+`Group.routesAt(now)`，`membersFound` 解析组时按请求时间过滤，窗口外的
+成员等同于 `off`；无法读取的窗口视为没有窗口，不会把成员整个摘掉。保存
+时 `cleanWindows` 校验时间、星期和时区，并只保留组内成员；成员改名、分享
+导入、provider 改名时窗口跟着改；`groupsState` 和保存路径在调用方不带
+`windows` 时保留旧值，所以 Routing 页面保存不会抹掉时间窗。
+
+当前配置：THS 4.1 `22:00–次日 08:00`，Token Maxing 4.1 `16:00–次日
+08:00`，每天生效（含周末），`08:00–16:00` 两个 4.1 都不可用，第一层降级
+到 `ths/deepseek-v4-flash`。22:00–08:00 重叠期仍按 `weights` 的 3:1
+（Token Maxing : THS）。
+
+已停用 `local.magpie-ths-v41-window`（`launchctl bootout`），plist 移到
+`~/.local/share/magpie-sub2api/disabled-launchd/`，旧
+`configure_ths_v41_time_window.py` 不再运行。旧机制的 07:40/08:01 边界和
+周末全开随之取消。
+
+本机已安装 `0.1.3939-native-windows`（二进制 SHA-256
+`5f953a49dea0d9229aec8adafca41c30160484b44550d56dec4518ce2af4b3d4`），
+经原有 handover 接管网关；旧 App 备份在
+`~/.local/share/magpie-sub2api/backup-native-windows-20261113-165929`。
+首次保存时旧的 GUI 进程仍占着 `127.0.0.1:3430`，把 `windows` 丢了；结束
+旧进程后由新版重存成功。验证：provider 全包 2557 项、gateway 组相关
+488 项通过；17:02 对 `group/deepseek-v41-speed` 的实际路由候选只有
+`token-mixing/deepseek-v4.1-flash`，THS 已被窗口排除。Routing 页面暂不
+显示时间窗徽标，成员行仍按 `off` 显示。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output

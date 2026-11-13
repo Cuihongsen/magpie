@@ -153,6 +153,7 @@ func mapModelRefs(f *file, to func(string) string) {
 		for k, m := range g.Off {
 			g.Off[k] = to(m)
 		}
+		g.Windows = renamedWindows(g.Windows, to)
 		g.Weights = renamedWeights(g.Weights, to)
 		g.EffortMaps = renamedEffortMaps(g.EffortMaps, to)
 		g.Classifier = to(g.Classifier)

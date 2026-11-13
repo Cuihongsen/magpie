@@ -357,6 +357,7 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 		g.Placed = compact(mapEach(g.Placed, ref))
 		g.Seen = compact(mapEach(g.Seen, ref))
 		g.Off = compact(mapEach(g.Off, ref))
+		g.Windows = renamedWindows(g.Windows, ref)
 		g.Weights = renamedWeights(g.Weights, ref)
 		g.EffortMaps = renamedEffortMaps(g.EffortMaps, ref)
 		g.Classifier = ref(g.Classifier)

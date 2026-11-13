@@ -295,6 +295,12 @@ func (g *Group) RenameMember(from, to string) {
 			g.Off[i] = to
 		}
 	}
+	g.Windows = renamedWindows(g.Windows, func(m string) string {
+		if m == from {
+			return to
+		}
+		return m
+	})
 	g.Weights = renamedWeights(g.Weights, func(m string) string {
 		if m == from {
 			return to
