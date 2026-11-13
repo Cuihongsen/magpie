@@ -23,9 +23,10 @@ permissions:
 jobs:
   package:
     name: package (macOS arm64)
-    # macos-14 is Apple Silicon: the app is built natively, as the Makefile's
-    # cgo and the CoreML guard require.
-    runs-on: macos-14
+    # macos-latest is Apple Silicon on GitHub's hosted runners: the app is
+    # built natively, as the Makefile's cgo and the CoreML guard require.
+    # (macos-14 was refused for this account's runner configuration.)
+    runs-on: macos-latest
     timeout-minutes: 45
 
     steps:
