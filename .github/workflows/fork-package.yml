@@ -1,11 +1,17 @@
 name: Fork package
 
-# This fork's own packaging, on GitHub's runners alone: every push to the
-# customizations branch and every v* tag builds the macOS app (ad-hoc
-# signed, no Apple certificate here) and the cross-compiled CLI for every
-# target the Makefile names, and a tag publishes them on this fork's
-# Releases. Upstream's release.yml hands off to yetone/magpie-releases with
-# the upstream owner's token, so its jobs stand aside in a fork.
+# This fork's own packaging, on GitHub's runners alone. A push to the
+# customizations branch builds the macOS app (ad-hoc signed: no Apple
+# certificate here) and keeps it as an artifact. A v* tag also builds the
+# cross-compiled CLI, in parallel on Linux, and publishes everything on
+# this fork's Releases. Upstream's release.yml hands off to
+# yetone/magpie-releases with the upstream owner's token, so its jobs stand
+# aside in a fork.
+#
+# The CLI targets are a tag's work, not every push's: seven full builds on a
+# macOS runner took longer than the app itself. Linux cross-compiles them
+# while the app builds, and upload-artifact does not recompress files that
+# are already zip and dmg (compression-level 0).
 
 on:
   push:
@@ -21,19 +27,17 @@ permissions:
   contents: write
 
 jobs:
-  package:
-    name: package (macOS arm64)
+  app:
+    name: app (macOS arm64)
     # macos-latest is Apple Silicon on GitHub's hosted runners: the app is
     # built natively, as the Makefile's cgo and the CoreML guard require.
-    # (macos-14 was refused for this account's runner configuration.)
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # git describe names a branch build after the tag before it
-          fetch-depth: 0
+          fetch-depth: 0 # git describe names a branch build after its tag
 
       - uses: actions/setup-go@v5
         with:
@@ -58,8 +62,8 @@ jobs:
       - name: Build the macOS app
         run: make app VERSION="${{ steps.version.outputs.version }}"
 
-      # no Developer ID here, and no notarisation: the app runs on a Mac
-      # that trusts it once the quarantine flag is off (INSTALL.txt says so)
+      # no Developer ID here, and no notarisation: the app runs once the
+      # quarantine flag is off (INSTALL.txt says how)
       - name: Sign it for this computer (ad hoc)
         shell: bash
         run: |
@@ -67,16 +71,82 @@ jobs:
           codesign --force --deep --sign - magpie.app
           codesign --verify --deep --strict magpie.app
 
-      - name: Package
+      - name: Zip the app
         shell: bash
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
           mkdir -p out
           ditto -c -k --sequesterRsrc --keepParent magpie.app "out/magpie-${V}-macos-arm64.zip"
+          cat > "out/INSTALL.txt" <<EOF
+          magpie ${V} (fork build, macOS arm64 app)
+
+          Unzip magpie-${V}-macos-arm64.zip and put magpie.app in /Applications.
+          It is ad-hoc signed, not notarised: if macOS refuses it, run
+
+            xattr -dr com.apple.quarantine /Applications/magpie.app
+          EOF
+          ls -lh out
+
+      # a disk image takes hdiutil a while and the zip is what CI needs:
+      # a tag gets one for people who prefer it
+      - name: Make a dmg, for a tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
           hdiutil create -volname "magpie ${V}" -srcfolder magpie.app -ov -format UDZO \
             "out/magpie-${V}-macos-arm64.dmg"
-          make release-cli VERSION="$V"
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magpie-app-${{ steps.version.outputs.version }}
+          path: out/*
+          if-no-files-found: error
+          compression-level: 0 # zip and dmg are compressed already
+          retention-days: 30
+
+  cli:
+    name: cli (cross-compiled)
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(git describe --tags --always | sed 's/^v//')"
+          fi
+          VERSION="$(printf '%s' "$VERSION" | tr -cd 'A-Za-z0-9._+-')"
+          [[ -n "$VERSION" ]] || VERSION="0.0.0-${GITHUB_SHA::8}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build every CLI target
+        run: make release-cli VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Zip them
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          mkdir -p out
           for f in dist/magpie-cli-*; do
             base="$(basename "$f")"
             base="${base#magpie-cli-}"
@@ -85,37 +155,42 @@ jobs:
             esac
             zip -q -j "out/magpie-${V}-${base}.zip" "$f"
           done
-          cat > out/INSTALL.txt <<EOF
-          magpie ${V} (fork build, macOS arm64 app + CLI)
-
-          macOS app: unzip magpie-${V}-macos-arm64.zip and put magpie.app in
-          /Applications. It is ad-hoc signed, not notarised: if macOS refuses
-          it, run
-
-            xattr -dr com.apple.quarantine /Applications/magpie.app
-
-          CLI: the magpie-${V}-<os>-<arch>.zip holds one binary named magpie
-          (magpie.exe on Windows). It is the terminal-only build, no GUI.
-          EOF
-          (cd out && shasum -a 256 * > SHA256SUMS.txt)
           ls -lh out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: magpie-${{ steps.version.outputs.version }}
+          name: magpie-cli-${{ steps.version.outputs.version }}
           path: out/*
           if-no-files-found: error
+          compression-level: 0
           retention-days: 30
 
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [app, cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: magpie-*
+          path: out
+          merge-multiple: true
+
       - name: Publish the tag's release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: always() && !cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --generate-notes
+          ls -lh out
+          (cd out && shasum -a 256 * > SHA256SUMS.txt)
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes
           fi
-          gh release upload "$TAG" out/* --clobber
+          gh release upload "$TAG" out/* --repo "$REPO" --clobber
