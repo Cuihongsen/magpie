@@ -1,0 +1,23 @@
+name: dsh-agent-request
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to comment on
+        required: true
+      message:
+        description: Comment body
+        required: true
+permissions:
+  contents: read
+  issues: write
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post comment as github-actions[bot]
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+          MESSAGE: ${{ inputs.message }}
+        run: gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$MESSAGE"
