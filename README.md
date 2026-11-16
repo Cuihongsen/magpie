@@ -318,3 +318,7 @@ If magpie saved you from editing one more config file, **a ⭐ helps others find
 [MIT](LICENSE)
 
 magpie is not affiliated with [Apache Magpie](https://magpie.apache.org) or the [Apache Software Foundation](https://apache.org).
+
+## Local agent test
+
+This repository is also used to test dsh-superagent with the local magpie gateway. Those tests give the agent a small request and check the change it opens as a pull request.
