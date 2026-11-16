@@ -37,7 +37,7 @@ func NotesFeed() string {
 // ReleasePage is version's page on GitHub, where its notes are when the
 // site can't give them (#661).
 func ReleasePage(version string) string {
-	return "https://github.com/yetone/magpie-releases/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
+	return "https://github.com/" + forkRepoName() + "/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
 }
 
 // NotesBetween asks the site for the notes of every release after after
@@ -52,6 +52,9 @@ func NotesBetween(ctx context.Context, after, upto, lang string) ([]Note, error)
 // all before MostNotes keeps the newest, so a list cut short can say so
 // (sujingshen on X: 156 releases behind read "40 releases").
 func NotesBetweenTotal(ctx context.Context, after, upto, lang string) ([]Note, int, error) {
+	if forkRepo != "" {
+		return nil, 0, nil // the fork's releases carry their own notes
+	}
 	q := url.Values{"upto": {upto}}
 	if after != "" {
 		q.Set("after", after)

@@ -10,7 +10,10 @@ endif
 # A tag may hold $, ( or `, which the shell lines below would run: the
 # version keeps only what a version is spelled with.
 VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | tr -cd 'A-Za-z0-9._+-'),dev)
-LDFLAGS  = -s -w -X main.version=$(VERSION)
+# The fork this build updates from: its GitHub releases, read by
+# internal/update/fork.go. Empty builds the official feed's build.
+FORK_REPO ?= Cuihongsen/magpie
+LDFLAGS  = -s -w -X main.version=$(VERSION) -X github.com/yetone/magpie/internal/update.forkRepo=$(FORK_REPO)
 TAGS     = production
 TARGETS  = darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64 android/arm64
 

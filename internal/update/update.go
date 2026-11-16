@@ -148,6 +148,9 @@ func LatestEvery(ctx context.Context, lang string) (*Release, error) {
 // when it is Stable's version (the site's Stable download). Only the site
 // knows it, so a failed feed is never answered from GitHub.
 func LatestStable(ctx context.Context) (*Release, error) {
+	if forkRepo != "" {
+		return forkLatest(ctx, "")
+	}
 	u, err := url.Parse(Feed())
 	if err != nil {
 		return nil, err
@@ -159,6 +162,9 @@ func LatestStable(ctx context.Context) (*Release, error) {
 }
 
 func latestAt(ctx context.Context, feed, lang string) (*Release, error) {
+	if forkRepo != "" {
+		return forkLatest(ctx, lang)
+	}
 	if githubOnly() {
 		return githubLatest(ctx, lang)
 	}

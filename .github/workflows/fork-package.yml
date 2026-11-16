@@ -74,7 +74,10 @@ jobs:
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
           mkdir -p out
-          ditto -c -k --sequesterRsrc --keepParent magpie.app "out/magpie-${V}-macos-arm64.zip"
+          # magpie-darwin-arm64.zip is the name the updater installs
+          # (update.AppAsset); the versioned copy is for people
+          ditto -c -k --sequesterRsrc --keepParent magpie.app "out/magpie-darwin-arm64.zip"
+          cp "out/magpie-darwin-arm64.zip" "out/magpie-${V}-macos-arm64.zip"
           cat > "out/INSTALL.txt" <<EOF
           magpie ${V} (fork build, macOS arm64 app)
 

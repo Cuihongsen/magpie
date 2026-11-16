@@ -200,6 +200,27 @@ Windows 标题栏、按 key 的独立价格、以及大量 provider/agent 兼容
 14 项通过。未运行全量 `go test ./...`。时间窗、Token Maxing 配置、
 Codex 480K/400K 均未改动。
 
+## 自动更新指向本 fork
+
+`internal/update/fork.go` 增加 fork 更新模式，由构建参数
+`-X .../internal/update.forkRepo=Cuihongsen/magpie` 打开；Makefile 的
+`FORK_REPO` 默认就是该仓库，所以本 fork 构建的 App 只读自己的 GitHub
+Releases：
+
+- 读 `api.github.com/repos/Cuihongsen/magpie/releases/latest`，不再访问
+  usemagpie.ai 的官方 feed，也不会把官方更新装进来。
+- 安装文件是固定名 `magpie-darwin-arm64.zip`（`update.AppAsset()`），
+  hash 取自发布里的 `SHA256SUMS.txt`；CI 现在同时上传这个固定名和带版本
+  号的副本。
+- 不要求官方 ed25519 签名（密钥只在 yetone 的仓库里），但代码签名照旧
+  校验：ad-hoc 构建只能替换 ad-hoc 构建；GitHub 的构建归属仍可在
+  Actions 里查。
+- Stable/Daily 频道和“What's new”的官方历史 notes 在 fork 模式下不再
+  参与；发布页链接改指本 fork。
+
+CI 的 `Fork package` 在 `v*` tag 上会创建 Release 并上传 zip、dmg、
+`INSTALL.txt`、`SHA256SUMS.txt`，正好是更新器要的形状。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output

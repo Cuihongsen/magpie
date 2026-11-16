@@ -57,6 +57,9 @@ func signedRequired(version string) bool {
 // fails, or whose feed hash differs from the signed one is an error.
 func (rel *Release) verify() error {
 	if rel.Signed == nil {
+		if forkRepo != "" {
+			return nil // the fork's own release: SHA256SUMS.txt is its word
+		}
 		if signedRequired(rel.Version) {
 			return fmt.Errorf("release %s is not signed; not installed", rel.Version)
 		}
