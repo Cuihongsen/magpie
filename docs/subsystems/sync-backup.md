@@ -21,8 +21,11 @@ clone a working tree or synchronize arbitrary files.
   branch or using the repository's default.
 - [`backup.go`](../../internal/backup/backup.go) owns bundle contents and
   sealing. Sync divides the setup into providers, settings, profiles, agents
-  and library. Provider keys, agent models, library and usage have their own
-  inclusion switches.
+  and library. Each part, provider keys, memory, usage and sign-ins have
+  their own inclusion switches (`Config.syncs`).
+- [`plan.go`](../../internal/davsync/plan.go) previews a sync (`Preview`,
+  `PreviewWith`), runs the one previewed (`SyncPreviewed`) and undoes the
+  last sync that brought parts in (`UndoSync`).
 - [`usage.go`](../../internal/davsync/usage.go) shares separately sealed usage
   and quota files through a remote's `files` interface.
 - [`restore.go`](../../internal/davsync/restore.go) replaces local parts from
@@ -37,8 +40,8 @@ The settings part carries the user's preferences, but not what is only about
 one computer. [`Settings.KeepOwn`](../../internal/settings/settings.go) puts
 those back from this computer's settings whenever a sync, a join, a Restore,
 an Undo or a backup file brings settings in, and `hashes` blanks them, so
-changing one is no change to push. They are: the window's size and whether it
-was maximised, the fonts, the proxy, the gateway's port, sharing on the local
+changing one is no change to push. They are: the window's size, whether it
+was maximised and whether it is kept on top (`OnTop`), the fonts, the proxy, the gateway's port, sharing on the local
 network (`LAN`) and the addresses let in to it (`AllowIPs`), the private
 hosts magpie may download from (`FetchPrivate`), the Dock, gateway
 mode, keeping awake, lightweight windows, WSL lookups, account discovery, when
@@ -182,7 +185,8 @@ repository and `magpie github upload`, rather than WebDAV's recovery path.
 A local file that is there but can't be read is unknown, never empty or the
 defaults. `backup.Collect` stops on an unreadable providers.json (with its groups
 and order), settings.json (`settings.LoadChecked`: unreadable, or
-not parsing with no good `.bak`) or library.json, and on a gateway key
+not parsing with no good `.bak`), library.json or memory (its meta.json, see
+[Memory](memory.md#source-of-truth)), and on a gateway key
 store that fails to export. A backup, an export and a sync all end with that
 error, nothing sealed or pushed; the sync's status shows it. A missing or
 empty settings.json is still none (`TestCollectStopsOnUnreadableSettings`,
@@ -195,6 +199,54 @@ configurations and clients. Only the active server is used. Empty credential
 fields reuse a saved credential only for its matching account; GitHub
 restricts reuse to the same owner/repo. Branch or prefix changes within that
 repository can keep the token. The branch is part of the sync state key.
+
+## What syncs, preview and undo
+
+#6428 (jinpwng on X): sync only the library and memory, keep each
+computer's providers, settings and models, see what a sync changes before
+it does, and take it back.
+
+- **What syncs.** `Config.Providers`, `Settings` and `Profiles` are
+  `*bool`, nil meaning synced, so a `sync.json` from before the choice
+  syncs every part as it did. `Agents`, `Library`, `Memory`, `Usage` and
+  `SignIns` were switches already. A part left out (`Config.syncs` false)
+  is neither read from nor written to the file: this computer keeps its
+  own, the server keeps the others' (a first computer puts none of it up,
+  which a joining one reads as `unset`). The Settings form shows
+  Providers (with their API keys under it), Settings, Agents' models,
+  Library and Memory; Profiles, Usage and Sign-ins sit under a folded
+  Advanced, open when one of them is set away from its default. The form
+  sends a part's choice only when it is off or was off, so saving an old
+  setup leaves it nil. The setup text carries the choice, and the CLI's
+  `set providers=no settings=no profiles=no` sets it. The Sync row says
+  which parts stay on each computer (`sync-left`).
+- **Turned back on.** `state.Off` is the parts the last sync left out. One
+  turned back on is joined like a first sync (`rejoin`, `again` in
+  `syncOnce`): the server's comes here, this computer's kept in the sync
+  folder, and an `unset` one on the server leaves this computer's
+  (`TestSyncPartTurnedBackOn`).
+- **Preview.** `syncOnce` with a `*Plan` runs the same merge and returns
+  before any write, here or on the server. A part's plan says `in`, `up`,
+  `same` or `off`, whether it replaces a change made here (`replaces`), and
+  its items added, removed or changed; memory, sign-ins and plugins removed
+  by another computer are counted. `Plan.Token` hashes what the sync would
+  do; `SyncPreviewed(token)` runs only while a new plan has the same token,
+  else `ErrPlanChanged` and the GUI shows the new plan. A preview from the
+  form (`PreviewWith`) is of the unsaved setup, and its Save and sync is
+  the form's ordinary save, without a token. Reached by Settings → Sync →
+  Preview a sync, the form's Preview, `/api/davsync/preview`,
+  `/api/davsync/sync-previewed` and `magpie <webdav|s3|github> preview`.
+- **Undo.** A sync that brings parts in keeps this computer's setup first
+  (`keepSealed`, as a join does) and records `state.Applied`. `UndoSync`
+  puts those parts back from that file, after keeping what is here now.
+  A part changed here since the sync is `*ChangedSince` (HTTP 409 with
+  `changed`), written over only with `force` (Undo anyway, `undo-sync
+  anyway`). The undo stays on this computer: `state.Local` is set to the
+  undone parts' hashes, so the next sync sends nothing and the server keeps
+  the others' (`TestUndoSync`). A change made here later is an ordinary
+  local change, and that whole part goes up. `/api/davsync/undo-sync`,
+  Settings → Sync → Undo the last sync, `magpie <kind> undo-sync`.
+  Restore's Undo (`davsync/undo`) is unchanged: it undoes a Restore.
 
 ## Backups by themselves
 
@@ -426,7 +478,19 @@ switch that anyone with the file and the passphrase can use those accounts.
   responses stay actionable errors. Authentication, permission and branch
   failures remain distinct from missing files. Rate limits use sync backoff.
 - The request archive goes to S3 only when sync has a bucket. Its objects are
-  separate from the encrypted setup and usage files. With no bucket the same
+  separate from the encrypted setup and usage files. In the bucket it is kept
+  to `RequestArchiveMB` (1 GiB unless set; synced, as every computer writes
+  the one bucket) by `gateway/archive_bucket.go`: the oldest calls past it
+  are removed, down to a tenth under it. Only names of `ArchiveName`'s shape
+  under `<prefix>/magpie/archive/` are counted or removed, never the backup,
+  usage or another key. The serving magpie lists the archive once, two
+  minutes after it starts, whether the archive is on or off, so a bucket
+  grown before the cap (18 GB in a month for an R2 user on X) is brought
+  under it on update. After that uploads are counted, and the bucket is
+  listed again only once a tenth of the size has been uploaded since
+  (`TestRequestArchiveKeptUnderItsSize`,
+  `TestBucketArchiveBroughtUnderItsSizeAtStart`,
+  `TestBucketArchiveListedPerTenthUploaded`). With no bucket the same
   files are kept on this computer instead (`gateway.DiskArchive`, in
   `<settings.Dir()>/request-archive/<date>/<id>.json`, written through a
   temporary file and renamed, 0600), under its own switch,
@@ -466,6 +530,53 @@ them into its agents beside the user's own hooks and records its own
 entries, an older bundle with no list keeps this computer's, and a library
 with none hashes as before (`TestSyncHooks`, `TestNoHooksHashAsBefore`,
 `TestBackupFileCarriesHooks`).
+
+billion-context's own config, `billion-context.json` (`library.Bundle.Bili`,
+see [library](library.md)), goes in the library part by sync and backup file
+alike: the text as written, comments kept, with magpie's summary recipe at
+the canonical gateway address, put back at this computer's gateway when it
+is written, so two computers on different ports don't trade it back and
+forth. A file bili can't read, or one over 1 MiB, is not carried, so it
+never arrives as empty; a bundle without it leaves this computer's alone.
+Before a carried file replaces a different one here, this computer's is
+kept with the backups. Its credential store, `<config>.summary-credentials.json`,
+is never carried: the computer that writes magpie's recipe saves its own
+gateway key there. A file naming a DSN is left out of a keyless backup
+file (`WithoutSecrets`). A library with no such file hashes as before, and
+running bilis are asked to reload after one is written
+(`TestBiliFileCarried`, `TestBiliFileNotCarriedUnreadable`,
+`TestBiliFileDSNNotInKeylessBackup`, `TestBiliFileInLibraryPart`). A sync's preview names it as
+the file `billion-context.json`, added, changed or removed
+(`TestBiliFileInPreview`).
+
+Claude Code's own plugins, the ones installed through its `/plugin`
+marketplaces (`library.Bundle.ClaudePlugins`,
+[`claude_plugins.go`](../../internal/library/claude_plugins.go)), go in the
+library part too. What goes is each marketplace's source (from
+`plugins/known_marketplaces.json` and settings.json's
+`extraKnownMarketplaces`, with only `source` and `autoUpdate` kept) and the
+plugin ids settings.json's `enabledPlugins` has on, under
+`CLAUDE_CONFIG_DIR` when it is set. `installLocation`, `installPath` and the
+downloaded code in `plugins/marketplaces` and `plugins/cache` stay: they are
+this computer's, and Claude Code fetches them again from the sources. A
+marketplace from a local folder or file, or one whose source has a user or
+token in a URL or request headers, is not carried, and neither are its
+plugins. Claude Code adds `claude-plugins-official` itself, so only its
+plugins go. On the other computer they are added to settings.json's
+`extraKnownMarketplaces` and `enabledPlugins`, the setup Claude Code
+installs from at its next interactive start (tried with 2.1.319 in a
+sandbox; `claude -p` does not install). Claude Code's own
+`known_marketplaces.json` and `installed_plugins.json` are never written.
+The file is patched in place (comments and other keys kept) and renamed in
+from a temporary file, and the one it replaces is kept with the backups.
+It only adds: a marketplace known here under that name, and a plugin with
+any value here (turned off too), stay as they are, so a plugin removed on
+one computer is not removed on the others. A settings.json either side
+can't read is neither carried as none nor written over. A computer with no
+such plugins carries none and hashes as before (`TestClaudePluginsCollected`,
+`TestClaudePluginsNoneOrUnknown`, `TestClaudePluginsPut`,
+`TestClaudePluginsInLibraryPart`). The preview names each marketplace and
+plugin (`TestClaudePluginsInPreview`).
 
 ## Verification
 

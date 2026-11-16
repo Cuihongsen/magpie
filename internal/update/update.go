@@ -114,7 +114,7 @@ func proxied() http.RoundTripper {
 type updateProxy struct{ http.RoundTripper }
 
 func (u updateProxy) RoundTrip(req *http.Request) (*http.Response, error) {
-	if c := strings.TrimSpace(settings.Load().UpdateProxy); c != "" && netproxy.Choice(req.Context()) == "" {
+	if c := strings.TrimSpace(settings.Shared().UpdateProxy); c != "" && netproxy.Choice(req.Context()) == "" {
 		req = req.WithContext(netproxy.With(req.Context(), c))
 	}
 	return u.RoundTripper.RoundTrip(req)
@@ -141,6 +141,21 @@ func LatestIn(ctx context.Context, lang string) (*Release, error) {
 // what Stable's "up to date" leaves out, the newest release out.
 func LatestEvery(ctx context.Context, lang string) (*Release, error) {
 	return latestAt(ctx, withLang(Feed(), lang), lang)
+}
+
+// LatestStable is the Stable channel's release, whatever Settings'
+// channel: what a fresh install compares itself with, to stay on Stable
+// when it is Stable's version (the site's Stable download). Only the site
+// knows it, so a failed feed is never answered from GitHub.
+func LatestStable(ctx context.Context) (*Release, error) {
+	u, err := url.Parse(Feed())
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("channel", settings.UpdateStable)
+	u.RawQuery = q.Encode()
+	return latestFrom(ctx, u.String(), "")
 }
 
 func latestAt(ctx context.Context, feed, lang string) (*Release, error) {
@@ -1140,7 +1155,7 @@ func RelaunchArgs(window bool, view string) []string {
 }
 
 // AwaitPredecessor blocks, for a while at most, until the magpie that
-// relaunched this one has exited.
+// relaunched this one has exited; on Windows its WebView2 too (awaitGone).
 func AwaitPredecessor() {
 	reportStarted() // first: the one that started this waits for it
 	pid, err := strconv.Atoi(os.Getenv("MAGPIE_REPLACES"))
@@ -1148,9 +1163,7 @@ func AwaitPredecessor() {
 	if err != nil || pid <= 0 {
 		return
 	}
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline) && alive(pid); {
-		time.Sleep(100 * time.Millisecond)
-	}
+	awaitGone(pid)
 }
 
 type progressKey struct{}

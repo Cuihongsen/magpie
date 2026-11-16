@@ -233,7 +233,7 @@ magpie provider test openrouter</pre></div>
       <li><b>一覧の出どころ。</b>magpie は <code>https://openrouter.ai/api/v1/models</code> から一覧を取ります。各モデルのコンテキスト長もここから読みます。モデル名・推論レベル・価格は models.dev の <code>openrouter</code> カタログから来ます。</li>
       <li><b>ツールに見えるモデル。</b>OpenRouter のモデルは何百もあります。自分で選ばない限り、magpie は OpenRouter の一覧の先頭 24 個（新しい順）をツールに見せます。残りはプロバイダのモデル一覧で選ぶか、<span class="ui">系列の最新のみ</span> をオンにして各系列の最新だけに絞ります。</li>
       <li><b>新しいモデル。</b><code>auto-include</code> のルールに合うモデルはすぐに加わり、あとで一覧に初めて載ったものも加わります。<code>refresh-every</code> を設定すると、magpie が一覧を自分で取り直します。</li>
-      <li><b>画像モデル。</b>OpenRouter の <code>/models</code> にはテキストモデルしか載らないので、FLUX・Seedream・Riverflow・Recraft・GPT Image などの画像モデルは <code>/api/v1/images/models</code> から読みます。<span class="ui">設定 → モデル → 画像</span> で選びます。</li>
+      <li><b>画像モデル。</b>OpenRouter の <code>/models</code> にはテキストモデルしか載らないので、FLUX・Seedream・Riverflow・Recraft・GPT Image などの画像モデルとその無料版は <code>/api/v1/models?output_modalities=image</code> から読みます。<span class="ui">設定 → モデル → 画像</span> で選びます。</li>
       <li><b>判定モデル。</b>OpenRouter の判定モデル（<code>liquid/d1</code>、<code>cloudflare/clef</code>、<code>~typesafe/jev-latest</code> など）も一覧に入るので、ルーティンググループは同じキーで各ターンを分類できます。</li>
     </ul>
     <div class="code"><span class="lang">ターミナル</span><button class="copy" data-copy="ex-models">コピー</button><pre id="ex-models">magpie provider models openrouter +anthropic/claude-opus-5.5   # 一つ追加で見せる
@@ -294,6 +294,10 @@ magpie group set opus-anywhere stays=session models+=openrouter/anthropic/claude
       <li><b>Web 検索で選んでいないモデルが使われる？</b>使われません。magpie の Web 検索に OpenRouter が答えるときは、選んである OpenRouter のモデルだけを使います。OpenRouter は地域によってほかのモデルを断ることがあるからです。その検索では OpenRouter 自身の <code>web</code> プラグインをオンにし、これはどのモデルでも使えます。</li>
       <li><b>キーの確認。</b><code>magpie provider test openrouter</code> は各エンドポイントに、または指定した各モデルに小さなリクエストを送ります。<code>--as codex</code> や <code>--as claude-code</code> を付けると、そのツールと同じ形で送ります。</li>
     </ul>
+
+    <p><a href="/docs/ja/vercel">Vercel AI Gateway を Claude Code・Codex などのエージェントで使う</a></p>
+
+    <p><a href="/docs/ja/relay">API 中継サービスを Claude Code・Codex などのエージェントで使う</a></p>
 
     <h2 id="faq"><a class="anchor" href="#faq">よくある質問</a></h2>
     <h3>Claude Code で OpenRouter を使うには？</h3>

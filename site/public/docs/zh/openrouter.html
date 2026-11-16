@@ -233,7 +233,7 @@ magpie provider test openrouter</pre></div>
       <li><b>列表从哪来。</b>magpie 从 <code>https://openrouter.ai/api/v1/models</code> 拉取列表，里面有每个模型的上下文长度。模型名、推理档位和价格来自 models.dev 上的 <code>openrouter</code> 目录。</li>
       <li><b>工具能看到哪些模型。</b>OpenRouter 列出的模型有几百个。你没挑选时，magpie 给工具展示 OpenRouter 列表里的前 24 个（它按从新到旧排）。其余的可以在供应商的模型列表里勾选，也可以打开 <span class="ui">每系最新</span>，每个系列只留最新的一个。</li>
       <li><b>新模型。</b><code>auto-include</code> 规则会立刻加入匹配的模型，以后拉取列表时新出现的匹配模型也会自动加入；<code>refresh-every</code> 让 magpie 定期自己重新拉取列表。</li>
-      <li><b>图像模型。</b>OpenRouter 的 <code>/models</code> 只列文本模型，所以 magpie 从 <code>/api/v1/images/models</code> 读取 FLUX、Seedream、Riverflow、Recraft、GPT Image 等图像模型。在 <span class="ui">设置 → 模型 → 图像</span> 里选用。</li>
+      <li><b>图像模型。</b>OpenRouter 的 <code>/models</code> 只列文本模型，所以 magpie 从 <code>/api/v1/models?output_modalities=image</code> 读取 FLUX、Seedream、Riverflow、Recraft、GPT Image 等图像模型及其免费版本。在 <span class="ui">设置 → 模型 → 图像</span> 里选用。</li>
       <li><b>决策模型。</b>OpenRouter 的决策模型（<code>liquid/d1</code>、<code>cloudflare/clef</code>、<code>~typesafe/jev-latest</code>……）也会列出来，路由分组可以用同一个 Key 给每一轮做分类。</li>
     </ul>
     <div class="code"><span class="lang">终端</span><button class="copy" data-copy="ex-models">复制</button><pre id="ex-models">magpie provider models openrouter +anthropic/claude-opus-5.5   # 多展示一个
@@ -294,6 +294,10 @@ magpie group set opus-anywhere stays=session models+=openrouter/anthropic/claude
       <li><b>联网搜索会不会用到没选的模型？</b>不会。由 OpenRouter 回答 magpie 的联网搜索时，magpie 只用你选过的 OpenRouter 模型，因为 OpenRouter 可能因为地区拒绝别的模型。搜索时 magpie 会打开 OpenRouter 自己的 <code>web</code> 插件，它的任何模型都能用。</li>
       <li><b>检查 Key。</b><code>magpie provider test openrouter</code> 会向每个接口发一个很小的请求，或者发给你指定的每个模型。加上 <code>--as codex</code> 或 <code>--as claude-code</code>，就按那个工具的方式发送。</li>
     </ul>
+
+    <p><a href="/docs/zh/vercel">Vercel AI Gateway 接入 Claude Code、Codex 等 Agent</a></p>
+
+    <p><a href="/docs/zh/relay">中转站 API 接入 Claude Code、Codex 等 Agent</a></p>
 
     <h2 id="faq"><a class="anchor" href="#faq">常见问题</a></h2>
     <h3>Claude Code 怎么用 OpenRouter？</h3>

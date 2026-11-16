@@ -165,6 +165,41 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4314 合并
+
+2026-11-16 合并官方 `v0.1.4314`（`187d06724`）：区间 608 个提交、
+1705 个文件（+138,758/−8,223）。上游这段时间主要在 Realtime API、
+Claude 订阅的 advisor/web search、Remote magpie 的 agent 启动与地址
+变更、Codex 配置键校验、Quick check 多搜索 API、侧边栏页面顺序、
+Windows 标题栏、按 key 的独立价格、以及大量 provider/agent 兼容性。
+
+冲突与处理：
+
+- `internal/gateway/gateway.go`：保留上游 `provider.Readdressed` 的重试
+  地址更新；去掉重复的 `c := cands[i]`；`pauseAlive` 新参数按
+  `readdressedOf([]candidate{c})` 传入，疯狂重试和错误冷却仍按 15 秒/
+  100ms 逻辑等待。
+- `internal/gui/providers.go`、`app.js`：同时保留本地
+  `crazyRetry`/`crazyRetryCount`/`errorCooldownSeconds` 与上游新增的
+  `keyPriceRates`、`resolve`、`routingAdvanced`；Advanced 展开判断两边
+  条件都保留。
+- `internal/gui/assets/plugins/routing/client.js`：成员行同时保留本地的
+  时间窗标签和上游的整行拖动。
+- `internal/gui/assets/i18n.js`：五种语言的本地重试/冷却文案与上游新增
+  文案并排保留。
+- `core_budget_test.go`：上游预算 1,086,971/1,271,061 加上本地
+  2,529 字节的控件，设为 1,089,500/1,273,590。
+- `groupwindow_test.go`：上游把 `Entry.Provider` 改成 `*Provider`，测试
+  随之取地址。
+- `provider-crazy-retry.test.cjs`：沙箱补上 `fieldInputs` 与
+  `parentElement`/`querySelector`，因为上游 `field()` 现在自动给输入框
+  加 `aria-label`。
+
+验证：`go build -tags nogui ./...`、`make build` 通过；provider 全包
+2,688 项、gateway 定向 111 项、GUI 定向 6 项、CLI 定向 7 项、Node
+14 项通过。未运行全量 `go test ./...`。时间窗、Token Maxing 配置、
+Codex 480K/400K 均未改动。
+
 ## 行为
 
 修复位于 Magpie 原有网关：识别 LiteLLM 的 combined input/output

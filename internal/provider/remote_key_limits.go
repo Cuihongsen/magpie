@@ -41,7 +41,9 @@ type GatewayKeyLimit struct {
 	// Limited is false for a key the remote holds to no limit.
 	Limited bool `json:"limited"`
 	// Period is "day", "week", "month", "days" (a cycle of Days days) or
-	// "hours" (of Hours hours) or "total" (until reset by hand).
+	// "hours" (of Hours hours), "total" (until reset by hand) or "account"
+	// (one subscription account's window there; Reset zero while the
+	// remote can't read it).
 	Period string    `json:"period,omitempty"`
 	Days   int       `json:"days,omitempty"`
 	Hours  int       `json:"hours,omitempty"`
@@ -202,8 +204,10 @@ func keyLimitCard(a *remoteKeyAnswer) (*GatewayKeyLimit, []QuotaWindow) {
 			continue
 		}
 		resets := &x.Reset
-		if x.Period == "total" {
-			resets = nil // it never ends by itself
+		if x.Period == "total" || x.Reset.IsZero() {
+			// it never ends by itself, or follows an account's window
+			// whose reset the remote can't read now
+			resets = nil
 		}
 		if x.TokenLimit > 0 {
 			ws = append(ws, QuotaWindow{Name: keyWindowName("Tokens", x.Period), Used: share(float64(x.Tokens), float64(x.TokenLimit)), ResetsAt: resets,
@@ -246,7 +250,7 @@ func keyWindowName(what, period string) string {
 
 // askRemoteKeyLimit asks p's gateway, with key, for that key's limit.
 func askRemoteKeyLimit(ctx context.Context, p Provider, key string) (*remoteKeyAnswer, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.Via(ctx), 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Anthropic+RemoteKeyLimitPath, nil)
 	if err != nil {
@@ -264,7 +268,7 @@ func askRemoteKeyLimit(ctx context.Context, p Provider, key string) (*remoteKeyA
 	case res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusMethodNotAllowed:
 		return nil, errors.New(errRemoteNoKeyLimit)
 	case res.StatusCode == http.StatusForbidden:
-		return nil, errors.New(errRemoteNotShared)
+		return nil, remoteRefused(p, res, b)
 	case res.StatusCode == http.StatusUnauthorized:
 		return nil, errors.New(errRemoteKey)
 	case res.StatusCode < 200 || res.StatusCode >= 300:

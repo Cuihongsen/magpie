@@ -10,7 +10,8 @@
 // port, 1024 up, is typed here; magpie moves its gateway there and every
 // agent it connected with it, or says why it can't (another program has
 // it). MAGPIE_ADDR, a whole host:port, comes first and the field shows it,
-// off (Chicring on Discord: the row was titled a port while it showed one).
+// off, the row titled an address then (Chicring on Discord: the row was
+// titled a port while it showed one).
 let portDraft = { value: null, err: "" };
 // portSays is the gateway's word on a port it couldn't take, in the page's
 // language: it says the port, so it is matched rather than looked up
@@ -25,14 +26,18 @@ function renderPort(s) {
   const box = $("#portList");
   const r = el("div", "row pref port-row");
   const who = el("div", "who");
-  who.append(el("div", "name", t("Gateway address")));
+  // a port is all that is typed here, so it is called one; MAGPIE_ADDR's
+  // whole host:port is an address (the owner, 11-12: the row titled an
+  // address over a field that takes 3425)
+  const title = t(s.addrEnv ? "Gateway address" : "Gateway port");
+  who.append(el("div", "name", title));
   const sub = el("div", "sub");
   const d = portDraft;
   const now = s.addrEnv ? "" : String(s.port || 3425);
   const field = input(d.value ?? now, "3425");
   field.className = "words gateway-port";
   field.inputMode = "numeric";
-  field.setAttribute("aria-label", t("Gateway address"));
+  field.setAttribute("aria-label", title);
   const save = el("button", "text", t("Apply"));
   if (s.addrEnv) {
     field.value = s.addrEnv;
@@ -77,12 +82,16 @@ function renderPort(s) {
 // renderBareIds: Model ids without the provider (settings.bareModelIDs,
 // love1sbug on X, moving from CLIProxyAPI): the gateway's /v1/models
 // lists each model by its own id as well, gpt-5.6-sol beside
-// codex/gpt-5.6-sol. Posted on its own; off by default.
+// codex/gpt-5.6-sol. Only lists it by that id alone, in place of the
+// provider/model ids it stands for (settings.bareModelIDsOnly, qQianye on
+// X: a Docker magpie's client listed every model twice, and a gateway has
+// no Agents page to pick models on). Posted on its own; off by default.
 function renderBareIds(s) {
   renderBusyLoad(s); // Models › Routing's row
   renderContextCap(s);
-  $("#bareIdsSegs").replaceChildren(segs([[false, t("Off")], [true, t("On")]], !!s.bareModelIDs, (on) =>
-    writingPrefs(api("settings/bare-ids", { on })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
+  const now = !s.bareModelIDs ? "off" : s.bareModelIDsOnly ? "only" : "on";
+  $("#bareIdsSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")], ["only", t("Only")]], now, (v) =>
+    writingPrefs(api("settings/bare-ids", { on: v !== "off", only: v === "only" })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
       .catch((e) => { status(t(e.message), "err"); renderSettings(); })));
 }
 
@@ -408,7 +417,10 @@ function httpsSays(m) {
 function renderHTTPS(s, asked) {
   const box = $("#httpsList");
   if (!box) return;
-  if (!asked) api("settings/https").then((h) => { httpsState = h; renderHTTPS(prefs, true); }).catch(() => {});
+  // asked while the rows can show, and again once the saved switch moves
+  // from what it said: every Settings draw asking cost a request a draw,
+  // and a page's write counts read it as a write (#6709)
+  if (!asked && s && (s.lan || s.onNetwork || s.https) && (!httpsState || !httpsState.on !== !s.https)) api("settings/https").then((h) => { httpsState = h; renderHTTPS(prefs, true); }).catch(() => {});
   const h = httpsState;
   if (!s || !h || (!s.lan && !s.onNetwork && !h.on)) return void box.replaceChildren();
   const post = (what, body) => writingPrefs(api("settings/https" + what, body))

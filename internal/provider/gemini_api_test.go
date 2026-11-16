@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,54 @@ func TestGeminiBase(t *testing.T) {
 	}
 	if got := GeminiPath("gemini-2.5-flash", false); got != "/models/gemini-2.5-flash:generateContent" {
 		t.Errorf("path %q", got)
+	}
+}
+
+// A namespaced model id keeps its slashes in every Gemini and Vertex AI
+// path, each segment escaped on its own (#6695); Google's own ids are
+// unchanged, and an id whose segments a server could clean into another
+// path (empty, . or ..) stays one escaped segment under models/.
+func TestGeminiModelPathKeepsSlashes(t *testing.T) {
+	for in, want := range map[string]string{
+		"gemini-2.5-pro":             "gemini-2.5-pro",
+		"gemini-3.8-flash-preview":   "gemini-3.8-flash-preview",
+		"claude-sonnet-4-5@20250929": "claude-sonnet-4-5@20250929",
+		"qwen3:8b":                   "qwen3:8b",
+		"example/model-demo":         "example/model-demo",
+		"a/b/c":                      "a/b/c",
+		"ex ample/model?x#y":         "ex%20ample/model%3Fx%23y",
+		"ns/100%":                    "ns/100%25",
+		"../secret":                  "..%2Fsecret",
+		"a/../b":                     "a%2F..%2Fb",
+		"a/./b":                      "a%2F.%2Fb",
+		"a//b":                       "a%2F%2Fb",
+		"/abs":                       "%2Fabs",
+		"trail/":                     "trail%2F",
+	} {
+		if got := GeminiModelPath(in); got != want {
+			t.Errorf("GeminiModelPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for got, want := range map[string]string{
+		GeminiPath("example/model-demo", true):         "/models/example/model-demo:streamGenerateContent?alt=sse",
+		GeminiPath("models/example/model-demo", false): "/models/example/model-demo:generateContent",
+		GeminiPath("gemini-2.5-pro", true):             "/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+		VertexPath("example/model-demo"):               "/publishers/google/models/example/model-demo:streamGenerateContent?alt=sse",
+		VertexWholePath("example/model-demo"):          "/publishers/google/models/example/model-demo:generateContent",
+		VertexWholePath("gemini-2.5-pro"):              "/publishers/google/models/gemini-2.5-pro:generateContent",
+	} {
+		if got != want {
+			t.Errorf("path %q, want %q", got, want)
+		}
+	}
+	// whatever the id, the path stays under models/: cleaning it as a
+	// server or proxy may never leaves the models/ folder
+	for _, id := range []string{"..", "../..", "a/../../b", "./x", "x/.", "..%2F..", "%2e%2e/x"} {
+		p := GeminiPath(id, false)
+		clean := path.Clean(p)
+		if !strings.HasPrefix(clean, "/models/") || !strings.HasSuffix(clean, ":generateContent") {
+			t.Errorf("GeminiPath(%q) = %q cleans to %q, outside /models/", id, p, clean)
+		}
 	}
 }
 
@@ -217,5 +267,32 @@ func TestGeminiBaseSavedAsTyped(t *testing.T) {
 	got, _ := Find("oa")
 	if got.Chat != "https://relay.example" || got.Responses != "https://relay.example/api" {
 		t.Errorf("openai bases changed: %q %q", got.Chat, got.Responses)
+	}
+}
+
+// A relay's bare host, kept as typed (TestGeminiBase), is asked at its
+// /v1beta, as Google's SDKs ask one; a base with a path is asked as typed
+// (equinox0253 on X). The model list, a model's test and the gateway all
+// ask at Base(Gemini).
+func TestGeminiAsked(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                               "",
+		"https://api.wandapi.ai":         "https://api.wandapi.ai/v1beta",
+		"https://api.wandapi.ai/":        "https://api.wandapi.ai/v1beta",
+		"http://127.0.0.1:8080":          "http://127.0.0.1:8080/v1beta",
+		"https://api.wandapi.ai/v1beta":  "https://api.wandapi.ai/v1beta",
+		"https://relay.example/gemini":   "https://relay.example/gemini",
+		"https://relay.example/proxy/v1": "https://relay.example/proxy/v1",
+		"https://generativelanguage.googleapis.com/v1beta": "https://generativelanguage.googleapis.com/v1beta",
+	} {
+		if got := GeminiAsked(in); got != want {
+			t.Errorf("GeminiAsked(%q) = %q, want %q", in, got, want)
+		}
+		if got := (Provider{Gemini: in}).Base(Gemini); got != want {
+			t.Errorf("Base(Gemini) of %q = %q, want %q", in, got, want)
+		}
+	}
+	if got, _ := tiny(Provider{Gemini: "https://api.wandapi.ai"}, Gemini, "gemini-3.8-flash"); got != "https://api.wandapi.ai/v1beta/models/gemini-3.8-flash:generateContent" {
+		t.Errorf("a model's test asks %s", got)
 	}
 }

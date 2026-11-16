@@ -85,7 +85,7 @@ const maxDrawings = 4
 // ImageGen while it resolves, else AutoDrawer's. None when it is off or no
 // provider draws.
 func drawer() (string, bool) {
-	switch v := settings.Load().ImageGen; v {
+	switch v := settings.Shared().ImageGen; v {
 	case "off":
 		return "", false
 	case "":
@@ -109,7 +109,7 @@ func Drawer() string {
 // when magpie can't find it any more, so that AutoDrawer's draws in its
 // place, as VisionMissing is Image recognition's. "" when none is named,
 // it is off, or it resolves.
-func DrawerMissing() string { return drawerMissing(settings.Load().ImageGen) }
+func DrawerMissing() string { return drawerMissing(settings.Shared().ImageGen) }
 
 // drawerMissing is v, an Image generation pick, when magpie can't draw
 // with it: pickedMissing's, and a routing group ("group/<id>", 7up6666 on
@@ -1312,26 +1312,42 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 
 // restDrawer rests the image model on c's account when the account is out
 // of its quota for it, until the reset the refusal names (Antigravity's
-// "Your quota will reset after 3h19m30s.", resetsAt), else quotaRest. Only
-// the model rests (restID), never the account: its text models draw on
-// allowances of their own. The next drawing then asks the accounts that
-// still have it first (restLast in candidates), and a chat on that image
-// model goes past it too, where before every drawing asked the spent
-// account first again (01huadalang on Discord). A failure of any other
-// kind rests nothing, as before: a key, a request refused, a vendor down;
-// nor does any on a provider set never to rest for a limit (LimitRestOff).
+// "Your quota will reset after 3h19m30s.", resetsAt), or a ChatGPT
+// account's image window's as its headers told it (imageHeardOf), else
+// quotaRest; a 429 the headers said came with that window full is out of
+// quota whatever its words. Only the model rests (restID), never the
+// account: its text models draw on allowances of their own. The next
+// drawing then asks the accounts that still have it first (restLast in
+// candidates), and a chat on that image model goes past it too, where
+// before every drawing asked the spent account first again (01huadalang
+// on Discord). A failure of any other kind rests nothing, as before: a
+// key, a request refused, a vendor down; nor does any on a provider set
+// never to rest for a limit (LimitRestOff).
 func restDrawer(c candidate, code int, msg string) {
-	if c.p.Account == nil || c.p.LimitRestOff || c.model == "" || failure(code, []byte(msg)) != failQuota {
+	if c.p.Account == nil || c.p.LimitRestOff || c.model == "" {
 		return
 	}
 	now := time.Now()
+	agent, user := c.p.Account.UsageAgent(), c.p.Account.User
+	// the image window a ChatGPT account's reply told (#6412)
+	heard, told := imageHeardOf(agent, user, now)
+	told = told && strings.HasPrefix(c.model, codexDrawerFamily)
+	if failure(code, []byte(msg)) != failQuota && (code != http.StatusTooManyRequests || !told || heard.Used < 100) {
+		// a 429 whose words read as a short rate limit ("image limit
+		// reached") is the allowance's when the headers said it is full
+		return
+	}
 	r := Rest{Why: failQuota, Status: code, By: "quota", Key: c.restID(), Model: c.model,
-		agent: c.p.Account.UsageAgent(), user: c.p.Account.User, said: msg}
+		agent: agent, user: user, said: msg}
 	d := quotaRest
 	if w := resetsAt([]byte(msg), now); w > 0 {
 		d, r.By = min(w, longestQuota), "resets"
+	} else if told {
+		// a ChatGPT image refusal whose body names no reset: its window's,
+		// as the reply's headers told it, not quotaRest's guess
+		d, r.By = min(heard.Resets.Sub(now), longestQuota), "resets"
 	}
-	r.Until = now.Add(d)
+	r.Until = onWall(now.Add(d))
 	restingUntil.Lock()
 	restingUntil.m[r.Key] = r.Until
 	restingUntil.note[r.Key] = r
@@ -1499,6 +1515,11 @@ func (s *Server) sendWith(ctx context.Context, p provider.Provider, method, url,
 		return nil, 502, err
 	}
 	defer res.Body.Close()
+	if drawsCodex(p) {
+		// the image window a ChatGPT account's reply tells, a 200's too,
+		// for its card and a refusal's rest (#6412)
+		heardCodexImage(p, res.Header)
+	}
 	answered := time.Since(asked)
 	rb := &tracked{r: res.Body, last: time.Now()}
 	b, err := io.ReadAll(io.LimitReader(rb, 256<<20))
@@ -1542,9 +1563,9 @@ func (t *tracked) Read(p []byte) (int, error) {
 func stalledAt(got []byte, quiet time.Duration) string {
 	where := fmt.Sprintf("%s had come, and nothing more for the last %s", sizeOf(len(got)), quiet.Round(time.Second))
 	switch {
-	case bytes.Contains(got, []byte(`"b64_json"`)):
+	case bodyHas(got, `"b64_json"`):
 		return "it was sending the image itself as b64_json; " + where
-	case bytes.Contains(got, []byte(`"url"`)):
+	case bodyHas(got, `"url"`):
 		return "it was answering with the image's url, not the image; " + where
 	}
 	return "what came doesn't yet say whether the image was coming as a url or as b64_json; " + where
@@ -2124,7 +2145,7 @@ func (s *Server) drawGemini(ctx context.Context, p provider.Provider, model stri
 	}
 	body, _ := json.Marshal(map[string]any{"contents": []map[string]any{{"role": "user", "parts": parts}}, "generationConfig": cfg})
 	base := strings.TrimSuffix(strings.TrimRight(p.Base(provider.Chat), "/"), "/openai")
-	url := base + "/models/" + model + ":generateContent"
+	url := base + "/models/" + provider.GeminiModelPath(model) + ":generateContent"
 	return s.eachDrawing(d.N, func() (drawn, int, error) {
 		b, code, err := s.send(ctx, p, url, "application/json", body, false)
 		if err != nil {

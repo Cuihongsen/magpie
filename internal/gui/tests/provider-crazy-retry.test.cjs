@@ -23,6 +23,7 @@ class Element {
       contains: (name) => (this.className || "").split(" ").includes(name),
     };
   }
+  get parentElement() { return this.parent || null; }
   append(...children) {
     for (const child of children) { child.parent = this; this.children.push(child); }
   }
@@ -32,6 +33,13 @@ class Element {
   matches(selector) { return selector.split(", ").includes(this.tagName); }
   querySelectorAll(selector) {
     return this.children.flatMap((child) => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]);
+  }
+  querySelector(selector) {
+    if (selector.includes(":scope > .hint:last-child")) {
+      const hints = this.children.filter((child) => (child.className || "").split(" ").includes("hint"));
+      return hints[hints.length - 1] || null;
+    }
+    return this.querySelectorAll(selector)[0] || null;
   }
   closest(tag) { return this.tagName === tag ? this : this.parent?.closest(tag); }
 }
@@ -44,7 +52,7 @@ function editor(lang = "en") {
   });
   vm.runInContext(translations, context);
   context.t = (text) => lang === "en" ? text : vm.runInContext("I18N", context)[lang][text] || assert.fail(`${lang}: missing ${text}`);
-  for (const name of ["el", "field", "input", "tick", "baseAPIOf", "concurrencyDraft", "draftOf"]) load(context, name);
+  for (const name of ["el", "input", "tick", "fieldInputs", "field", "baseAPIOf", "concurrencyDraft", "draftOf"]) load(context, name);
   return context;
 }
 

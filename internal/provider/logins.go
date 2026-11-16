@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -225,7 +226,9 @@ func parseLogins(b []byte) ([]savedLogin, error) {
 		// a Max 20x saved before it was named Ultra
 		if out[i].Agent == "claude" && out[i].Plan == "max" {
 			if c, ok := parseClaudeCredentials(out[i].Auth); ok {
-				out[i].Plan = claudePlan(out[i].Plan, c.OAuth.RateLimitTier)
+				var acct map[string]any
+				_ = json.Unmarshal(out[i].Profile, &acct)
+				out[i].Plan = claudePlanShown(out[i].Plan, c.OAuth.RateLimitTier, claudeShownPlan(acct))
 			}
 		}
 	}
@@ -319,6 +322,15 @@ func writeLoginsTold(ls []savedLogin, tell bool) error {
 		defer Changed() // an account added, switched or gone: All builds anew
 	}
 	beforeLoginsWrite()
+	b = append(b, '\n')
+	if fileHolds(loginsPath(), b, 0o600) {
+		// the bytes are on the disk already (#6289): no new generation, no
+		// new mtime, and what filememo parsed stays
+		lastLoginsMu.Lock()
+		lastLogins, loginsKnown = slices.Clone(ls), true
+		lastLoginsMu.Unlock()
+		return nil
+	}
 	// the file there now is kept first: as its last good generation, or
 	// copied aside when it doesn't read, never written over unkept
 	if err := lastgood.Keep(loginsPath(), validLogins, 0o600); err != nil {
@@ -328,7 +340,7 @@ func writeLoginsTold(ls []savedLogin, tell bool) error {
 	if !tell {
 		write = writePrivateQuiet
 	}
-	if err := write(loginsPath(), append(b, '\n')); err != nil {
+	if err := write(loginsPath(), b); err != nil {
 		return err
 	}
 	lastLoginsMu.Lock()
@@ -365,6 +377,9 @@ func sortLogins(ls []savedLogin) {
 // an agent reading it at that moment sees either version, never half; the
 // new one is on the disk before it is renamed over the old (#1505).
 func writePrivate(path string, b []byte) error {
+	if fileHolds(path, b, 0o600) { // the file has these bytes (#6289): nothing moves
+		return nil
+	}
 	defer filememo.Forget() // read again, where a request holds it
 	return writePrivateQuiet(path, b)
 }
@@ -372,6 +387,9 @@ func writePrivate(path string, b []byte) error {
 // writePrivateQuiet is writePrivate with nothing read forgotten: a
 // request holding the file reads the old bytes for up to a second.
 func writePrivateQuiet(path string, b []byte) error {
+	if fileHolds(path, b, 0o600) {
+		return nil
+	}
 	path, err := edit.Target(path) // a symlink stays, its target written
 	if err != nil {
 		return err
@@ -380,6 +398,33 @@ func writePrivateQuiet(path string, b []byte) error {
 		return err
 	}
 	return steady.WriteFile(path, b, 0o600)
+}
+
+// fileHolds reports whether path is a file of exactly b, with the mode
+// the write would give it. A read that fails is "no": it is written.
+// writeChanged is steady.WriteFile for a file that is left alone, mtime
+// and all, when it already holds b (#6289).
+func writeChanged(path string, b []byte, perm os.FileMode) error {
+	if fileHolds(path, b, perm) {
+		return nil
+	}
+	return steady.WriteFile(path, b, perm)
+}
+
+func fileHolds(path string, b []byte, perm os.FileMode) bool {
+	path, err := edit.Target(path)
+	if err != nil {
+		return false
+	}
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != int64(len(b)) {
+		return false
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != perm {
+		return false
+	}
+	old, err := os.ReadFile(path)
+	return err == nil && bytes.Equal(old, b)
 }
 
 func upsertLogin(ls []savedLogin, l savedLogin) []savedLogin {
@@ -826,12 +871,13 @@ func liveLogin(agent string) (savedLogin, bool) {
 		if signedOut {
 			return savedLogin{}, false
 		}
-		l := savedLogin{Agent: agent, Plan: c.OAuth.plan(), Auth: b}
+		l := savedLogin{Agent: agent, Auth: b}
 		var acct map[string]any
 		if l.User, acct = claudeSignedInUser(c.OAuth.SubscriptionType, plan, user); acct != nil {
 			l.Profile, _ = json.Marshal(acct)
 			l.HeldAs = claudeProfileKey(l.Profile)
 		}
+		l.Plan = claudeLivePlan(c, "", acct)
 		if l.User == "" {
 			return savedLogin{}, false
 		}
@@ -1008,7 +1054,9 @@ func rememberLogins(force bool) {
 			}
 		}
 		if !ok {
-			if agent == "claude" && claudeLoggedOut(ls) {
+			// half-written as Claude Code rewrites it on Windows: unknown,
+			// not a sign-out (claudeSignInUnsure)
+			if agent == "claude" && !claudeSignInUnsure() && claudeLoggedOut(ls) {
 				changed = true
 			}
 			continue
@@ -1188,6 +1236,12 @@ func loginsNow(agent string) []Login {
 	}
 	var out []Login
 	ls := readLogins()
+	if _, ok := active["claude"]; !ok && claudeSignInUnsure() {
+		// read as Claude Code writes it: the account it held is still its own
+		if u := claudeHeldUser(ls); u != "" {
+			active["claude"] = u
+		}
+	}
 	standIn := ""
 	if _, ok := active["claude"]; !ok {
 		// the one the provider is listed on (claudeStandInAccount), a
@@ -1606,6 +1660,18 @@ func ForgetLogin(agent, user string) error {
 	}
 	if pp, ok := pluginOfAgent(agent); ok {
 		return forgetPluginLogin(pp, user)
+	}
+	if agent == "claude" {
+		// nor while a run is in the account's own directory: magpie's own
+		// (a /usage, a warm-up) ends first, and another magpie process's
+		// is refused past the wait (#4532's run marks) — the removal here
+		// would take the directory from under that run (#3254)
+		mu := claudeDirRun(user)
+		mu.Lock()
+		defer mu.Unlock()
+		if err := waitClaudeRuns(user); err != nil {
+			return err
+		}
 	}
 	switch agent {
 	case "copilot":

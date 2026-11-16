@@ -197,7 +197,7 @@ var presets = []PresetDef{
 		Website: "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models",
 		NoList:  true,
 		Models: []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-			"gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+			"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
 			"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 			"deepseek-ai/deepseek-v4.1-flash-maas", "zai-org/glm-5.2-maas", "openai/gpt-oss-120b-maas",
 			"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2", "claude-fable-5-1"},
@@ -412,10 +412,10 @@ var presets = []PresetDef{
 	// token-plan.maas.qianwenaiapi.com, and on Alibaba Cloud Bailian
 	// (bailian.console.aliyun.com) at token-plan.cn-beijing.maas.aliyuncs.com
 	// (#1506). The models given are the plans' text models as their
-	// overviews list them, for when the host gives no list. Only the
-	// two at aliyuncs.com have a way to read the plan's credits, with the
-	// account's AccessKey (alibaba_usage.go); the Qwen AI platform's console
-	// takes a browser sign-in (#5829).
+	// overviews list them, for when the host gives no list. The two at
+	// aliyuncs.com read the plan's credits with the account's AccessKey
+	// (alibaba_usage.go); the Qwen AI platform's with a sign-in to the
+	// platform, as its own QianWen CLI does (qianwen_plan.go).
 	{ID: "qwen-token-plan", Name: "Qwen Token Plan", Short: "Qwen Plan", Icon: "qwen-color", Kind: KindVendor,
 		Chat: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", Anthropic: "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
 		Note:    "Qwen AI platform · subscription",
@@ -679,6 +679,15 @@ var presets = []PresetDef{
 			{ID: "global", Name: "Global", Chat: "https://global.yylx.io/v1", Anthropic: "https://global.yylx.io"},
 			{ID: "cn", Name: "China Mainland", Chat: "https://cn.yylx.io/v1", Anthropic: "https://cn.yylx.io"},
 		}},
+	// a sub2api relay (MindfulReturn on X, 11-14): one root for every
+	// protocol, as its docs/api page gives it, Chat and Responses at /v1
+	// and Messages at the root; a key serves its group's models alone,
+	// which /v1/models lists, and its balance is sub2api's /v1/usage
+	// (balance_probe.go). Its site carries the invite AIGoCode sponsors
+	// magpie with, as Kimi's do.
+	{ID: "aigocode", Name: "AIGoCode", Icon: "aigocode", Kind: KindRelay,
+		Chat: "https://api.aigocode.dev/v1", Responses: "https://api.aigocode.dev/v1", Anthropic: "https://api.aigocode.dev",
+		Website: "https://www.aigocode.net/invite/MAGPIE?utm_source=magpie&utm_medium=app", KeysURL: "https://www.aigocode.net/dashboard/keys"},
 
 	// Jev answers no conversation: it decides which of a routing group's
 	// models takes a turn, and how hard it thinks

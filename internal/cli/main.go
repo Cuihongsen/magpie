@@ -25,6 +25,7 @@ import (
 	"github.com/yetone/magpie/internal/davsync"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/imagemcp"
+	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/notices"
 	"github.com/yetone/magpie/internal/plugin"
@@ -105,7 +106,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
   magpie accounts add copilot [--host <name>.ghe.com]   one more Copilot account, on github.com or an enterprise's GHE.com
   magpie accounts discovery [on|off]   read agents' sign-ins (default on; MAGPIE_NO_ACCOUNTS=1 disables too)
-  magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap); the tool a ChatGPT or Claude file came from is signed out of it
+  magpie accounts import <codex|claude|antigravity|factory|<plugin>> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap, a plugin's own); the tool a ChatGPT or Claude file came from is signed out of it
   magpie accounts export <codex|claude> [<email>...] [--format sub2api|cliproxyapi] [--to <folder>] [--yes]   write accounts as a file Sub2API, CLIProxyAPI or magpie imports (0600; holds live sign-ins)
   magpie accounts import codex <file>... --access-only   keep each ChatGPT account with its access token only: never renewed, so the tool it came from stays signed in
   magpie accounts access-only codex <email> [on|off]   keep a ChatGPT account access token only, or let magpie renew its sign-in again
@@ -190,8 +191,9 @@ const usage = `magpie — one place to pick every agent's model
                                   http(s):// or socks5:// proxy for it; --mirror: a GitHub download mirror put
                                   before the github.com URL (none unless given; still checked against usemagpie.ai's SHA-256)
   magpie update mirror [<prefix>|off]  the mirror every update, the app's own too, is downloaded through
-  magpie update channel [stable|every]  which versions updates offer: stable (one a week, an urgent one at
-                                  once) or every version as it comes out (the default)
+  magpie update channel [stable|daily|every]  which versions updates offer: stable (one a week), daily (one
+                                  a day that passed its tests), an urgent one at once on both, or every
+                                  version as it comes out (the default)
   magpie update auto [on|off] [download|notify] [30m|1h|6h|24h]
                                   whether the app looks for updates by itself, how often (6h), and whether
                                   it downloads one at once or only says it is out (notify: for metered networks)
@@ -259,8 +261,9 @@ func Main(v string) {
 		if msg := err.Error(); msg != "" {
 			fmt.Fprintln(os.Stderr, "magpie:", msg)
 		}
-		os.Exit(code)
+		endProcess(code)
 	}
+	endProcess(0)
 }
 
 // runTUI runs the TUI, which quits on Ctrl+C and SIGTERM itself once it
@@ -417,6 +420,9 @@ func run(args []string) error {
 			if len(args) > 1 && args[1] == "memory" {
 				return browsermcp.RunMemory(args[2:])
 			}
+			if len(args) > 1 && args[1] == "sessions" {
+				return browsermcp.RunSessions(args[2:])
+			}
 			return imagemcp.Run(args[1:])
 		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
 			return claudebridge.RunMCP(args[1:])
@@ -512,6 +518,9 @@ func run(args []string) error {
 	// server's, a container's), at Claude Code's newest release: its runs
 	// turn its own updater off
 	gateway.WhileServing = append(gateway.WhileServing, claudecode.KeepCurrent)
+	// and the library's skills from GitHub and git repositories, fetched
+	// again by themselves when that is switched on (0xYaCo on X)
+	gateway.WhileServing = append(gateway.WhileServing, library.KeepSkillsCurrent)
 	// and the request archive, when it is on, goes to the bucket sync is to
 	gateway.ArchiveBucket = func() (gateway.Putter, bool) {
 		if b, ok := davsync.S3Bucket(); ok {
@@ -519,6 +528,9 @@ func run(args []string) error {
 		}
 		return nil, false
 	}
+	// and kept there under its size, a bucket grown before that brought
+	// under it once the gateway starts
+	gateway.WhileServing = append(gateway.WhileServing, gateway.KeepBucketArchiveBounded)
 	if len(args) == 0 {
 		if hasGUI {
 			return runGUI(true, "")

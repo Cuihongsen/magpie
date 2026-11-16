@@ -115,10 +115,20 @@ func KeepRemoteListsFollowed(ctx context.Context) {
 // followedMagpies are the Remote magpies whose lists are followed: on,
 // listing, not this magpie itself, with a schedule (their user's, or
 // RemoteMagpieEvery when none is set).
+//
+// Read from the parse kept until providers.json changes (storedFile), and
+// only a provider with an Anthropic address normalized: this runs every
+// minute, and parsing the whole file again each time was most of what an
+// idle magpie allocated for providers.
 func followedMagpies() []Provider {
-	own, _ := ownOf(load())
 	var out []Provider
-	for _, p := range own {
+	for _, p := range storedFile().Providers {
+		if strings.TrimSpace(p.Anthropic) == "" {
+			continue
+		}
+		if p = normalize(p); !hasEndpoint(p) {
+			continue
+		}
 		if p.IsRemoteMagpie() && !p.Off && p.lists() && p.Anthropic != "" && !p.SelfLeftOut() && p.RefreshInterval() > 0 {
 			out = append(out, p)
 		}
@@ -224,7 +234,7 @@ func followedOne(id string) *Provider {
 // as the list is fetched (listHeaders, signRemote), so the list the other
 // magpie compares is the one a fetch is answered.
 func waitRemoteList(ctx context.Context, p Provider, tag string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, (listWaitAsk+20)*time.Second)
+	ctx, cancel := context.WithTimeout(p.Via(ctx), (listWaitAsk+20)*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Anthropic+"/v1/models", nil)
 	if err != nil {

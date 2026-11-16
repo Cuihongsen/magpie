@@ -83,8 +83,8 @@ func TestAnUnreadableWindowNeverTakesAMemberOut(t *testing.T) {
 
 func TestCleanWindowsRefusesAWindowItCannotRead(t *testing.T) {
 	entries := []Entry{
-		{ID: "a/m", Provider: Provider{ID: "a"}, Model: "m"},
-		{ID: "b/m", Provider: Provider{ID: "b"}, Model: "m"},
+		{ID: "a/m", Provider: &Provider{ID: "a"}, Model: "m"},
+		{ID: "b/m", Provider: &Provider{ID: "b"}, Model: "m"},
 	}
 	g := Group{Members: []string{"a/m", "b/m"}, Windows: map[string]TimeWindow{"a/m": {From: "25:00", To: "08:00"}}}
 	if err := cleanWindows(entries, &g); err == nil {
