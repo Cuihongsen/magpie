@@ -165,9 +165,9 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
-## 官方 v0.1.4366 合并
+## 官方 v0.1.4367 合并
 
-2026-11-17 合并官方 `v0.1.4366`：保留渠道疯狂重试、错误冷却、
+2026-11-17 合并官方 `v0.1.4367`：保留渠道疯狂重试、错误冷却、
 分组时间窗、combined-token 修复及 fork 签名更新。上游新增免费模型
 分组、DeepSeek 降级、Qwen 并发重试和并行用量限制等功能。
 这次合并只更新仓库，不创建 Release 或替换已安装的 App。
