@@ -100,6 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          go clean -cache -testcache
+          df -h "$RUNNER_TEMP"
           hdiutil create -volname "magpie ${V}" -srcfolder magpie.app -ov -format UDZO \
             "out/magpie-${V}-macos-arm64.dmg"
           ls -lh out
