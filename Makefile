@@ -13,7 +13,8 @@ VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | tr -c
 # The fork this build updates from: its GitHub releases, read by
 # internal/update/fork.go. Empty builds the official feed's build.
 FORK_REPO ?= Cuihongsen/magpie
-LDFLAGS  = -s -w -X main.version=$(VERSION) -X github.com/yetone/magpie/internal/update.forkRepo=$(FORK_REPO)
+FORK_SIGNING_KEY ?= NX0cFpZ4MIhp6Da2qNAAzE291u7b/DohybTo/QKWXEk=
+LDFLAGS  = -s -w -X main.version=$(VERSION) -X github.com/yetone/magpie/internal/update.forkRepo=$(FORK_REPO) -X github.com/yetone/magpie/internal/update.forkSigningKey=$(FORK_SIGNING_KEY)
 TAGS     = production
 TARGETS  = darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64 android/arm64
 

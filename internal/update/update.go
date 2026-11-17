@@ -1251,7 +1251,11 @@ func download(ctx context.Context, a Asset, path string) error {
 	toAPI := mirrorOf(ctx) == ""
 	// Settings' update source (source.go): GitHub only starts at github.com
 	// and goes on to its API route; the site only goes to no other
-	switch Source() {
+	source := Source()
+	if Fork() {
+		source = settings.UpdateSourceGitHub
+	}
+	switch source {
 	case settings.UpdateSourceGitHub:
 		if toGitHub {
 			on.URL, toGitHub = a.GitHub, false

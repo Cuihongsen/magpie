@@ -12,7 +12,7 @@ name: Fork package
 
 on:
   push:
-    branches: [codex-local-customizations-v2697]
+    branches: [main, codex-local-customizations-v2697]
     tags: ['v*']
   workflow_dispatch:
 
@@ -58,6 +58,10 @@ jobs:
 
       - name: Build the macOS app
         run: make app VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Verify update tests
+        if: startsWith(github.ref, 'refs/tags/')
+        run: go test -tags nogui ./internal/update -count=1
 
       # no Developer ID here, and no notarisation: the app runs once the
       # quarantine flag is off (INSTALL.txt says how)
@@ -115,11 +119,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_KEY: ${{ secrets.MAGPIE_FORK_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          ls -lh out
+          OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          test -x "$OPENSSL"
+          test -n "$SIGNING_KEY"
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/fork-update-key.pem"
+          "$OPENSSL" pkey -in "$RUNNER_TEMP/fork-update-key.pem" -pubout -outform DER > "$RUNNER_TEMP/fork-update-public.der"
+          actual="$(tail -c 32 "$RUNNER_TEMP/fork-update-public.der" | base64 | tr -d '\n')"
+          test "$actual" = "NX0cFpZ4MIhp6Da2qNAAzE291u7b/DohybTo/QKWXEk="
           (cd out && shasum -a 256 * > SHA256SUMS.txt)
-          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes
+          printf 'magpie release %s\n' "$VERSION" > "$RUNNER_TEMP/fork-update-message"
+          cat out/SHA256SUMS.txt >> "$RUNNER_TEMP/fork-update-message"
+          "$OPENSSL" pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/fork-update-key.pem" \
+            -in "$RUNNER_TEMP/fork-update-message" -out "$RUNNER_TEMP/fork-update-signature"
+          base64 < "$RUNNER_TEMP/fork-update-signature" | tr -d '\n' > out/SHA256SUMS.txt.sig
+          "$OPENSSL" pkeyutl -verify -rawin -pubin -keyform DER -inkey "$RUNNER_TEMP/fork-update-public.der" \
+            -in "$RUNNER_TEMP/fork-update-message" -sigfile "$RUNNER_TEMP/fork-update-signature"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            test "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes --draft
           fi
           gh release upload "$TAG" out/* --repo "$REPO" --clobber
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest

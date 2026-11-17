@@ -30,6 +30,8 @@ import (
 // signing key. A var for tests.
 var signingKey = "3XuYQEohIRDF+zxGQry1iXGZ1cfKYFX3vsST6GSSbYQ="
 
+var forkSigningKey = ""
+
 // firstSigned is the first release published with a SHA256SUMS.sig.
 const firstSigned = "0.1.3862"
 
@@ -57,15 +59,16 @@ func signedRequired(version string) bool {
 // fails, or whose feed hash differs from the signed one is an error.
 func (rel *Release) verify() error {
 	if rel.Signed == nil {
-		if forkRepo != "" {
-			return nil // the fork's own release: SHA256SUMS.txt is its word
-		}
-		if signedRequired(rel.Version) {
+		if Fork() || signedRequired(rel.Version) {
 			return fmt.Errorf("release %s is not signed; not installed", rel.Version)
 		}
 		return nil
 	}
-	pub, err := base64.StdEncoding.DecodeString(signingKey)
+	key := signingKey
+	if Fork() {
+		key = forkSigningKey
+	}
+	pub, err := base64.StdEncoding.DecodeString(key)
 	if err != nil || len(pub) != ed25519.PublicKeySize {
 		return errors.New("update signing key is not valid")
 	}
@@ -98,7 +101,7 @@ func (rel *Release) verify() error {
 			return fmt.Errorf("release %s: the feed's checksum for %s is not the signed one; not installed", rel.Version, name)
 		}
 		a.SHA256 = want
-		a.attest = !Newer(firstAttested, rel.Version)
+		a.attest = !Fork() && !Newer(firstAttested, rel.Version)
 		rel.Assets[name] = a
 	}
 	return nil
