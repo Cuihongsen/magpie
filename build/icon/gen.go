@@ -1,16 +1,19 @@
 //go:build ignore
 
-// Icon generator. Everything magpie shows is drawn from one bird: a round
-// little magpie in profile, tail cocked, black and white, on a 44-unit grid.
-// magpie.svg is the full drawing, its belly, shoulder and the slits in its
-// tail cut out of the black; the app tile uses it from 64px up.
-// magpie-small.svg drops the eye, which would only be a speck; the tray and
-// the smaller tiles use it, and so does the header in
-// internal/gui/assets/index.html.
+// Icon generator. Everything magpie shows is drawn from one mark: the
+// magpie in a cream rounded square, provided as logo-v2.png (1024×1024)
+// in this folder (issue #3). The mark is a raster, so the generator draws
+// from its pixels rather than redrawing it as vectors: the tiles (app,
+// win, full) take the mark's own colours exactly as the artwork is; the
+// tray, its flap and the macOS 26 AppIcon layer are the mark's silhouette
+// — the black body and the blue tail, the white wing, belly and eye left
+// as holes — in black and alpha, as the menu bar and the tiled icon want.
 //
 //	go run build/icon/gen.go tray internal/gui/tray.png     # 44px black template icon (macOS menu bar)
 //	go run build/icon/gen.go tray-flap internal/gui/trayflap # its frames when clicked (a size after the folder for a bigger look)
 //	go run build/icon/gen.go app 64 internal/gui/icon.png   # app icon at a given size
+//	go run build/icon/gen.go full 512 internal/gui/assets/icons/icon-512.png # the mark full-bleed, as the web's icons are
+//	go run build/icon/gen.go favicon internal/gui/assets/icons/favicon.svg   # the page's favicon, the mark in an SVG
 //	go run build/icon/gen.go win 256 build/windows/icon-256.png # the Windows tile, filling its square
 //	go run build/icon/gen.go win-ico internal/gui/icon-windows.ico # it at the tray's sizes, one .ico
 //	make icons                                              # regenerates all of them plus magpie.icns
@@ -19,180 +22,249 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
 	"os"
-	"sort"
 	"strconv"
-	"strings"
 )
 
-var (
-	//go:embed magpie.svg
-	fullSVG string
-	//go:embed magpie-small.svg
-	smallSVG string
-)
+//go:embed logo-v2.png
+var logoPNG []byte
 
-func main() {
-	var img image.Image
-	switch {
-	case len(os.Args) == 3 && os.Args[1] == "tray":
-		img = tray()
-	case len(os.Args) == 3 && os.Args[1] == "tray-flap":
-		if err := trayFlap(os.Args[2], 44); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	case len(os.Args) == 4 && os.Args[1] == "tray-flap":
-		n, _ := strconv.Atoi(os.Args[3])
-		if err := trayFlap(os.Args[2], n); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	case len(os.Args) == 4 && os.Args[1] == "glyph":
-		n, _ := strconv.Atoi(os.Args[2])
-		img = glyph(n)
-	case len(os.Args) == 4 && (os.Args[1] == "app" || os.Args[1] == "app-dark"):
-		n, _ := strconv.Atoi(os.Args[2])
-		img = app(n, os.Args[1] == "app-dark")
-	case len(os.Args) == 4 && os.Args[1] == "win":
-		n, _ := strconv.Atoi(os.Args[2])
-		img = win(n)
-	case len(os.Args) == 3 && os.Args[1] == "win-ico":
-		if err := winICO(os.Args[2], trayICOSizes); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	default:
-		fmt.Fprintln(os.Stderr, "usage: gen.go tray <out.png> | gen.go app|app-dark|win <size> <out.png> | gen.go win-ico <out.ico>")
-		os.Exit(2)
-	}
-	f, err := os.Create(os.Args[len(os.Args)-1])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+// The mark's ink: the black body and the blue tail. The cream tile it
+// sits on and the white wing, belly and eye are left out (the white parts
+// are near-white), as the previous drawing's they were cut out of the
+// black. logoN is the mark's size in its own pixels.
+const logoN = 1024
+
+// trayW is how wide, of the 44 units, the tray bird's silhouette is drawn:
+// 18pt of the menu bar's 22, as the glyphs beside it are, and enough
+// clearance that the flap's bob, swinging a bird this wide, still keeps the
+// frames within the same 36 units.
+const trayW = 34
+
+// markR is the corner radius of the mark's rounded square, its own: the
+// cream tile's corners, measured on the provided mark (180.8 of 1024).
+const markR = 180.8 / logoN
+
+// The mark's ink bbox, in its own pixels, set when the mark loads, so the
+// silhouette can be placed the same every time.
+var inkBB [4]int
+
+// A loaded mark: the artwork with its rounded square's alpha, and the ink
+// silhouette and the blue tail as per-pixel coverage for sampling.
+type markT struct {
+	raw  []uint8 // RGBA, straight: the artwork masked to its rounded square
+	ink  []float64
+	blue []float64
+	// where the tail meets the body: the blue tail's outermost point on the
+	// right, and where the feet are: the middle of the dark ink's bottom
+	// rows, in the mark's pixels. The flap turns the tail about the first
+	// and bobs the bird about the second.
+	tailSrc, bobSrc [2]float64
 }
 
-// trayK is the tray bird's size in its 22pt square: drawn to the edges it
-// was a full 22pt wide, bigger than the menu bar's own glyphs (@SherlockYoYo:
-// 感觉这只鸟有些大); at .8 it is about 18pt by 14pt, centred.
-const trayK = 0.8
+var (
+	theMark *markT
+	markErr error
+)
 
-// tray draws the silhouette as a macOS template image (black + alpha).
-func tray() image.Image {
-	const S = 44
-	off := S / 2 * (1 - trayK)
-	cov := coverage(parse(smallSVG), S, 8, trayK, off, off)
-	img := image.NewNRGBA(image.Rect(0, 0, S, S))
-	for i, a := range cov {
-		img.SetNRGBA(i%S, i/S, color.NRGBA{0, 0, 0, uint8(a*255 + 0.5)})
+// logo returns the decoded mark, loading it once.
+func logo() *markT {
+	if theMark == nil && markErr == nil {
+		theMark, markErr = loadMark()
 	}
-	return img
+	if markErr != nil {
+		fmt.Fprintln(os.Stderr, markErr)
+		os.Exit(1)
+	}
+	return theMark
+}
+
+func loadMark() (*markT, error) {
+	im, err := png.Decode(bytes.NewReader(logoPNG))
+	if err != nil {
+		return nil, err
+	}
+	src := image.NewNRGBA(image.Rect(0, 0, logoN, logoN))
+	draw.Draw(src, src.Bounds(), im, image.Point{}, draw.Src)
+
+	m := &markT{
+		raw:  make([]uint8, logoN*logoN*4),
+		ink:  make([]float64, logoN*logoN),
+		blue: make([]float64, logoN*logoN),
+	}
+	// the rounded square's alpha, 4×4 per pixel, and the ink and tail maps
+	badge := logoN * markR
+	for y := 0; y < logoN; y++ {
+		for x := 0; x < logoN; x++ {
+			p := src.Pix[(y*logoN+x)*4:]
+			r, g, b := float64(p[0]), float64(p[1]), float64(p[2])
+			var cov float64
+			for sy := 0; sy < 4; sy++ {
+				for sx := 0; sx < 4; sx++ {
+					fx := math.Min(logoN-1e-3, float64(x)+(float64(sx)+0.5)/4)
+					fy := math.Min(logoN-1e-3, float64(y)+(float64(sy)+0.5)/4)
+					if roundRect(fx, fy, 0, 0, logoN, logoN, badge) {
+						cov += 0.0625
+					}
+				}
+			}
+			// how far from the cream tile and from the near-white parts:
+			// background where either is close, ink where both are far
+			dc := math.Max(math.Abs(r-253), math.Max(math.Abs(g-248), math.Abs(b-241)))
+			dw := math.Max(math.Abs(r-254), math.Max(math.Abs(g-254), math.Abs(b-254)))
+			d := math.Min(dc, dw)
+			ink := math.Max(0, math.Min(1, (d-12)/24))
+			blu := math.Max(0, math.Min(1, (b-math.Max(r, g))/60))
+			m.raw[(y*logoN+x)*4] = p[0]
+			m.raw[(y*logoN+x)*4+1] = p[1]
+			m.raw[(y*logoN+x)*4+2] = p[2]
+			m.raw[(y*logoN+x)*4+3] = uint8(cov*255 + 0.5)
+			m.ink[y*logoN+x] = ink
+			m.blue[y*logoN+x] = blu
+		}
+	}
+	// the ink bbox, from the coverage
+	loX, loY, hiX, hiY := logoN, logoN, -1, -1
+	for y := 0; y < logoN; y++ {
+		for x := 0; x < logoN; x++ {
+			if m.ink[y*logoN+x] > 0.5 {
+				if x < loX {
+					loX = x
+				}
+				if x > hiX {
+					hiX = x
+				}
+				if y < loY {
+					loY = y
+				}
+				if y > hiY {
+					hiY = y
+				}
+			}
+		}
+	}
+	inkBB = [4]int{loX, loY, hiX, hiY}
+	// the tail's root and the feet, as the flap's two points
+	m.tailSrc = [2]float64{float64(loX), float64(loY)}
+	for y := loY; y <= hiY; y++ {
+		for x := loX; x <= hiX; x++ {
+			if m.blue[y*logoN+x] > 0.5 && float64(x) > m.tailSrc[0] {
+				m.tailSrc = [2]float64{float64(x), float64(y)}
+			}
+		}
+	}
+	feetLo, feetHi := hiX, loX
+	for y := hiY - 8; y <= hiY; y++ {
+		for x := loX; x <= hiX; x++ {
+			if m.ink[y*logoN+x] > 0.8 && m.blue[y*logoN+x] < 0.2 {
+				feetLo = min(feetLo, x)
+				feetHi = max(feetHi, x)
+			}
+		}
+	}
+	m.bobSrc = [2]float64{float64(feetLo+feetHi) / 2, float64(hiY)}
+	return m, nil
+}
+
+// colorOf is the mark's colour at (u, v) in its own pixels, bilinear,
+// straight.
+func (m *markT) colorOf(u, v float64) (uint8, uint8, uint8, float64) {
+	u = math.Max(0, math.Min(logoN-1, u))
+	v = math.Max(0, math.Min(logoN-1, v))
+	x0 := int(math.Min(logoN-2, math.Floor(u)))
+	y0 := int(math.Min(logoN-2, math.Floor(v)))
+	ux, vx := u-float64(x0), v-float64(y0)
+	var r, g, b, a float64
+	for i := 0; i < 4; i++ {
+		xx, yy := x0, y0
+		if i&1 != 0 {
+			xx++
+		}
+		if i&2 != 0 {
+			yy++
+		}
+		wx := 1 - ux
+		if xx != x0 {
+			wx = ux
+		}
+		wy := 1 - vx
+		if yy != y0 {
+			wy = vx
+		}
+		p := m.raw[(yy*logoN+xx)*4:]
+		w := wx * wy
+		r += float64(p[0]) * w
+		g += float64(p[1]) * w
+		b += float64(p[2]) * w
+		a += float64(p[3]) * w
+	}
+	return uint8(r + 0.5), uint8(g + 0.5), uint8(b + 0.5), a
+}
+
+// covAt is the ink coverage at (u, v), bilinear.
+func (m *markT) covAt(u, v float64) float64 {
+	u = math.Max(0, math.Min(logoN-1, u))
+	v = math.Max(0, math.Min(logoN-1, v))
+	x0 := int(math.Min(logoN-2, math.Floor(u)))
+	y0 := int(math.Min(logoN-2, math.Floor(v)))
+	ux, vx := u-float64(x0), v-float64(y0)
+	a := m.ink[y0*logoN+x0]
+	b := m.ink[y0*logoN+x0+1]
+	c := m.ink[(y0+1)*logoN+x0]
+	d := m.ink[(y0+1)*logoN+x0+1]
+	return (a*(1-ux)+b*ux)*(1-vx) + (c*(1-ux)+d*ux)*vx
+}
+
+// blueAt is the blue tail's coverage at (u, v), bilinear.
+func (m *markT) blueAt(u, v float64) float64 {
+	u = math.Max(0, math.Min(logoN-1, u))
+	v = math.Max(0, math.Min(logoN-1, v))
+	x0 := int(math.Min(logoN-2, math.Floor(u)))
+	y0 := int(math.Min(logoN-2, math.Floor(v)))
+	ux, vx := u-float64(x0), v-float64(y0)
+	a := m.blue[y0*logoN+x0]
+	b := m.blue[y0*logoN+x0+1]
+	c := m.blue[(y0+1)*logoN+x0]
+	d := m.blue[(y0+1)*logoN+x0+1]
+	return (a*(1-ux)+b*ux)*(1-vx) + (c*(1-ux)+d*ux)*vx
+}
+
+// fit44 puts the ink bbox, w of the 44 units wide, into the middle of the
+// 44-unit grid the tray draws on, and gives the map from grid to the
+// mark's pixels: u = (g - o)/k.
+func fit44(w float64) (k, ox, oy float64) {
+	k = w / float64(inkBB[2]-inkBB[0])
+	ox = 22 - float64(inkBB[0]+inkBB[2])/2*k
+	oy = 22 - float64(inkBB[1]+inkBB[3])/2*k
+	return k, ox, oy
 }
 
 // The tray bird's flap is the header logo's (internal/gui/assets/app.css,
-// .logo.wag): the drawing cut into body, tail and wing by the same clip
-// paths, each piece turned about the same point through the same keyframes
-// over the same .9s, cubic-bezier(.3, 0, .3, 1) between each two of them,
-// and the whole bird bobbing about its feet. Keep the two alike.
+// .logo.wag): the tail turning about where it meets the body through the
+// same keyframes over the same .9s, cubic-bezier(.3, 0, .3, 1) between
+// each two of them, and the whole bird bobbing about its feet. The mark's
+// wing is white — a hole in the silhouette — so unlike the header's
+// cartoon there is no black wing to turn; the tail and the bob stay.
 const (
 	flapSecs  = 0.9
 	flapEvery = 0.03 // a frame every 30ms: internal/gui's flap plays them so
-	// the clip paths of index.html's #bird-body (even-odd: the wing is cut
-	// out of it), #bird-tail and #bird-wing, their H and V written as L for
-	// parse
-	clipBody = "M16 0L44 0L44 44L0 44L0 26.4L10.6 26.4L13 24.2L16 19Z M29.8 18.3L26 19L22 21L17 23.5L14.6 24.7L10.6 26.4L6 29V32L9 31.5L12.5 32L16.4 31.8L19 31.4L24 28.8L28.5 24L30.6 21.4Z"
-	clipTail = "M0 0L17 0L17.2 19.6L14 25L10.6 26.4L0 26.4Z"
-	clipWing = "M29.8 18.3L26 19L22 21L17 23.5L14.6 24.7L10.6 26.4L6 29V32L9 31.5L12.5 32L16.4 31.8L19 31.4L24 28.8L28.5 24L30.6 21.4Z"
 )
 
 // A keyframe: at is the fraction of the animation, deg the rotation.
 type key struct{ at, deg float64 }
 
 var (
-	wingKeys = []key{{0, 0}, {.12, 10}, {.26, -3}, {.40, 8}, {.56, -2}, {.72, 3}, {1, 0}}
 	tailKeys = []key{{0, 0}, {.18, 16}, {.36, -7}, {.54, 9}, {.72, -3}, {.86, 2}, {1, 0}}
 	bobKeys  = []key{{0, 0}, {.18, -4}, {.40, 2}, {.62, -1}, {1, 0}}
-	// transform-origin, in the viewBox
-	wingAt, tailAt, bobAt = [2]float64{30, 19.8}, [2]float64{14, 22}, [2]float64{26, 38}
 )
-
-// trayFlap writes the frames the tray icon plays when it is clicked,
-// flap-01.png on, one every flapEvery of the animation, the still bird at
-// both ends left out.
-func trayFlap(dir string, S int) error {
-	bird := parse(smallSVG)
-	body, tail, wing := parse(`d="`+clipBody+`"`), parse(`d="`+clipTail+`"`), parse(`d="`+clipWing+`"`)
-	n := int(math.Round(flapSecs / flapEvery))
-	const ss = 8
-	k := float64(S) / 44
-	for f := 1; f < n; f++ {
-		t := float64(f) / float64(n)
-		bob, tl, wg := keyed(bobKeys, t), keyed(tailKeys, t), keyed(wingKeys, t)
-		// each piece is the bird and its clip path both turned as CSS turns
-		// the piece's group: the bob outside, the piece's own turn inside
-		m := func(rings [][][2]float64, at [2]float64, deg float64) []bool {
-			moved := make([][][2]float64, len(rings))
-			for i, r := range rings {
-				moved[i] = make([][2]float64, len(r))
-				for j, p := range r {
-					q := turn(turn(p, at, deg), bobAt, bob)
-					// shrunk about the middle, as tray() draws the still bird
-					moved[i][j] = [2]float64{22 + (q[0]-22)*trayK, 22 + (q[1]-22)*trayK}
-				}
-			}
-			return mask(moved, S*ss, k*ss)
-		}
-		pieces := [][2][]bool{
-			{m(bird, tailAt, 0), m(body, tailAt, 0)},
-			{m(bird, tailAt, tl), m(tail, tailAt, tl)},
-			{m(bird, wingAt, wg), m(wing, wingAt, wg)},
-		}
-		N := S * ss
-		img := image.NewNRGBA(image.Rect(0, 0, S, S))
-		for py := 0; py < S; py++ {
-			for px := 0; px < S; px++ {
-				hit := 0
-				for sy := 0; sy < ss; sy++ {
-					for sx := 0; sx < ss; sx++ {
-						i := (py*ss+sy)*N + px*ss + sx
-						for _, pc := range pieces {
-							if pc[0][i] && pc[1][i] {
-								hit++
-								break
-							}
-						}
-					}
-				}
-				img.SetNRGBA(px, py, color.NRGBA{0, 0, 0, uint8(float64(hit)/(ss*ss)*255 + 0.5)})
-			}
-		}
-		out, err := os.Create(fmt.Sprintf("%s/flap-%02d.png", dir, f))
-		if err != nil {
-			return err
-		}
-		err = png.Encode(out, img)
-		out.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // keyed is the rotation at t of keyframes played as CSS plays them, each
 // step eased by cubic-bezier(.3, 0, .3, 1).
@@ -231,118 +303,187 @@ func turn(p, o [2]float64, deg float64) [2]float64 {
 	return [2]float64{o[0] + dx*c - dy*s, o[1] + dx*s + dy*c}
 }
 
-// mask is which of an n×n grid of samples, k to a unit, fall in the
-// rings, even-odd.
-func mask(rings [][][2]float64, n int, k float64) []bool {
-	out := make([]bool, n*n)
-	var xs []float64
-	for y := 0; y < n; y++ {
-		v := (float64(y) + 0.5) / k
-		xs = xs[:0]
-		for _, r := range rings {
-			for i, j := 0, len(r)-1; i < len(r); j, i = i, i+1 {
-				a, b := r[j], r[i]
-				if (a[1] > v) != (b[1] > v) {
-					xs = append(xs, (a[0]+(v-a[1])*(b[0]-a[0])/(b[1]-a[1]))*k)
+// mono renders a black+alpha image of S×S, ss×ss samples under each pixel,
+// calling f with grid coordinates for the coverage it sees there.
+func mono(S, ss int, f func(gx, gy float64) float64) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, S, S))
+	for y := 0; y < S; y++ {
+		for x := 0; x < S; x++ {
+			var hit float64
+			for sy := 0; sy < ss; sy++ {
+				for sx := 0; sx < ss; sx++ {
+					gx := float64(x) + (float64(sx)+0.5)/float64(ss)
+					gy := float64(y) + (float64(sy)+0.5)/float64(ss)
+					hit += f(gx, gy)
 				}
 			}
-		}
-		sort.Float64s(xs)
-		for i := 0; i+1 < len(xs); i += 2 {
-			lo := int(math.Max(0, math.Ceil(xs[i]-0.5)))
-			hi := int(math.Min(float64(n), math.Ceil(xs[i+1]-0.5)))
-			for x := lo; x < hi; x++ {
-				out[y*n+x] = true
-			}
+			a := uint8(hit / float64(ss*ss) * 255)
+			img.SetNRGBA(x, y, color.NRGBA{0, 0, 0, a})
 		}
 	}
-	return out
+	return img
+}
+
+// tray draws the silhouette as a macOS template image (black + alpha).
+func tray() image.Image {
+	m := logo()
+	k, ox, oy := fit44(trayW)
+	return mono(44, 8, func(gx, gy float64) float64 {
+		u, v := (gx-ox)/k, (gy-oy)/k
+		return m.covAt(u, v)
+	})
+}
+
+// trayFlap writes the frames the tray icon plays when it is clicked,
+// flap-01.png on, one every flapEvery of the animation, the still bird at
+// both ends left out.
+func trayFlap(dir string, S int) error {
+	m := logo()
+	k, ox, oy := fit44(trayW)
+	// the two points, in the 44-unit grid
+	g := func(p [2]float64) [2]float64 { return [2]float64{p[0]*k + ox, p[1]*k + oy} }
+	bobAt := g(m.bobSrc)
+	tailAt := g(m.tailSrc)
+	n := int(math.Round(flapSecs / flapEvery))
+	const ss = 8
+	for f := 1; f < n; f++ {
+		t := float64(f) / float64(n)
+		bob, tl := keyed(bobKeys, t), keyed(tailKeys, t)
+		// each piece is the mark sampled through the animation inverted,
+		// as CSS turns the piece's group: the bob outside, the piece's own
+		// turn inside. The body piece is the ink without the blue tail;
+		// the tail piece is the blue tail, turning about where it meets
+		// the body.
+		img := mono(S, ss, func(gx, gy float64) float64 {
+			p := turn([2]float64{gx, gy}, bobAt, -bob)
+			ub := [2]float64{(p[0] - ox) / k, (p[1] - oy) / k}
+			u, v := ub[0], ub[1]
+			body := m.covAt(u, v) * (1 - m.blueAt(u, v))
+			q := turn(p, tailAt, -tl)
+			u2, v2 := (q[0]-ox)/k, (q[1]-oy)/k
+			tail := m.covAt(u2, v2) * m.blueAt(u2, v2)
+			a := body
+			if tail > a {
+				a = tail
+			}
+			return a
+		})
+		out, err := os.Create(fmt.Sprintf("%s/flap-%02d.png", dir, f))
+		if err != nil {
+			return err
+		}
+		err = png.Encode(out, img)
+		out.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // glyph is the bird alone, black on clear, as big on an n-pixel canvas as
 // app draws it on its tile: the layer of build/darwin/AppIcon.icon, which
 // macOS 26 lays on a tile of its own, light or dark (#117).
 func glyph(n int) image.Image {
-	S := float64(n)
-	k := S * 0.8 / 44
-	o := S/2 - 22*k
-	cov := coverage(parse(fullSVG), n, 4, k, o, o)
-	img := image.NewNRGBA(image.Rect(0, 0, n, n))
-	for i, a := range cov {
-		img.SetNRGBA(i%n, i/n, color.NRGBA{0, 0, 0, uint8(a*255 + 0.5)})
-	}
-	return img
+	m := logo()
+	// the bird fills 0.66 of the canvas: the mark's ink is 0.825 of the
+	// mark, the mark 0.8 of the tile (app)
+	k := float64(n) * 0.66 / float64(inkBB[2]-inkBB[0])
+	ox := float64(n)/2 - float64(inkBB[0]+inkBB[2])/2*k
+	oy := float64(n)/2 - float64(inkBB[1]+inkBB[3])/2*k
+	return mono(n, 4, func(gx, gy float64) float64 {
+		return m.covAt((gx-ox)/k, (gy-oy)/k)
+	})
 }
 
-// app draws a rounded square, white shading to the palest grey, with the
-// bird on it in ink, on macOS's icon grid: the tile is ~80% of the
-// canvas, the rest left clear as the Dock and Finder expect.
-func app(n int, dark bool) image.Image {
+// app draws the mark on macOS's icon grid: the tile is ~80% of the
+// canvas, the rest left clear as the Dock and Finder expect. The mark's
+// own rounded square is the tile, corners and all.
+func app(n int) image.Image {
+	m := logo()
 	S := float64(n)
 	inset := S * 0.1
-	return tile(n, inset, (S-2*inset)*0.225, dark)
-}
-
-// win is the same tile as Windows draws an app's icon: filling its square,
-// as the icons beside it in the taskbar, the tray and Start do. On macOS's
-// grid it was a fifth smaller than its neighbours there (dzxx0496). A
-// pixel is left round it from 32px up, a 32nd of the side, so the rounded
-// corners' soft edge stays inside the square; under 32px that pixel would
-// be most of the margin and only blur the edge, so the tile meets it.
-func win(n int) image.Image {
-	inset := float64(n / 32)
-	return tile(n, inset, (float64(n)-2*inset)*0.2, false)
-}
-
-// tile draws the rounded square inset from each edge of an n-pixel canvas,
-// its corners of the given radius, and the bird on it at .8 of its side.
-func tile(n int, inset, radius float64, dark bool) image.Image {
-	S := float64(n)
 	side := S - 2*inset
-	k := side * 0.8 / 44
-	o := inset + side/2 - 22*k
+	k := side / logoN
 	ss := 4
 	if n <= 64 {
 		ss = 8
 	}
-	// under 64px the eye is a grey speck; leave it out
-	shape := fullSVG
-	if n < 64 {
-		shape = smallSVG
+	return tileAt(n, inset, side, markR*side, k, ss, m, false)
+}
+
+// win is the same tile as Windows draws an app's icon: filling its square,
+// as the icons beside it in the taskbar, the tray and Start do. A pixel
+// is left round it from 32px up, a 32nd of the side, so the rounded
+// corners' soft edge stays inside the square; under 32px that pixel would
+// be most of the margin and only blur the edge, so the tile meets it.
+func win(n int) image.Image {
+	m := logo()
+	inset := float64(n / 32)
+	side := float64(n) - 2*inset
+	k := side / logoN
+	ss := 4
+	if n <= 64 {
+		ss = 8
 	}
-	bird := coverage(parse(shape), n, ss, k, o, o)
-	bg1, bg2 := 0xff, 0xec // top, bottom
-	ink := 0x16
-	if dark {
-		// the Dock's dark appearance (macOS 26): the bird in white on a
-		// dark tile, as macOS would otherwise darken the tile under a black
-		// bird and lose it (#117)
-		bg1, bg2, ink = 0x3a, 0x22, 0xf4
-	}
+	return tileAt(n, inset, side, markR*side, k, ss, m, false)
+}
+
+// full is the mark full-bleed and opaque, as the web's icons are: the
+// whole square filled, so a launcher can mask it itself.
+func full(n int) image.Image {
+	m := logo()
+	return tileAt(n, 0, float64(n), 0, float64(n)/logoN, 4, m, true)
+}
+
+// tileAt draws the mark, scaled by k so its top-left corner sits at
+// (inset, inset), into an n-pixel canvas, its corners cut to the rounded
+// square of the given radius. opaque fills the whole square (the web's
+// full-bleed icons); otherwise the corners stay clear.
+func tileAt(n int, inset, side, radius, k float64, ss int, m *markT, opaque bool) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, n, n))
 	for y := 0; y < n; y++ {
 		for x := 0; x < n; x++ {
-			var tile float64
+			var tile, rr, gg, bb, aa float64
 			for sy := 0; sy < ss; sy++ {
 				for sx := 0; sx < ss; sx++ {
 					fx := float64(x) + (float64(sx)+0.5)/float64(ss)
 					fy := float64(y) + (float64(sy)+0.5)/float64(ss)
-					if roundRect(fx, fy, inset, inset, side, side, radius) {
-						tile++
+					if opaque || roundRect(fx, fy, inset, inset, side, side, radius) {
+						u := (fx - inset) / k
+						v := (fy - inset) / k
+						r, g, b, a := m.colorOf(u, v)
+						w := 1 / float64(ss*ss)
+						tile += w
+						rr += float64(r) * w
+						gg += float64(g) * w
+						bb += float64(b) * w
+						aa += a * w
 					}
 				}
 			}
 			if tile == 0 {
 				continue
 			}
-			t := float64(y) / S
-			bg := float64(bg1)*(1-t) + float64(bg2)*t
-			a := bird[y*n+x]
-			g := uint8(bg*(1-a) + float64(ink)*a + 0.5)
-			img.SetNRGBA(x, y, color.NRGBA{g, g, g, uint8(tile / float64(ss*ss) * 255)})
+			img.SetNRGBA(x, y, color.NRGBA{uint8(rr/tile + 0.5), uint8(gg/tile + 0.5), uint8(bb/tile + 0.5), uint8(tile*255 + 0.5)})
 		}
 	}
 	return img
+}
+
+// favicon writes the page's icon as an SVG carrying the mark: the page
+// links icons/favicon.svg, so the mark itself rides in it as a raster the
+// browser draws.
+func favicon(out string) error {
+	const n = 64
+	m := logo()
+	inset, side := n*0.1, n*0.8
+	var b bytes.Buffer
+	if err := png.Encode(&b, tileAt(n, inset, side, markR*side, side/logoN, 8, m, false)); err != nil {
+		return err
+	}
+	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><image width="64" height="64" href="data:image/png;base64,%s"/></svg>`, base64.StdEncoding.EncodeToString(b.Bytes()))
+	return os.WriteFile(out, []byte(svg), 0o644)
 }
 
 // trayICOSizes are the sizes Windows asks a tray icon for (SM_CXSMICON):
@@ -385,92 +526,75 @@ func winICO(out string, sizes []int) error {
 	return os.WriteFile(out, ico.Bytes(), 0o644)
 }
 
-// coverage rasterises a shape, scaled by k and moved to (ox, oy), onto an n×n
-// grid of pixels with ss×ss samples each, and gives each pixel's coverage in
-// 0..1. It fills even-odd, a scanline at a time.
-func coverage(rings [][][2]float64, n, ss int, k, ox, oy float64) []float64 {
-	cov := make([]float64, n*n)
-	per := 1 / float64(ss*ss)
-	var xs []float64
-	for y := 0; y < n*ss; y++ {
-		v := ((float64(y)+0.5)/float64(ss) - oy) / k
-		xs = xs[:0]
-		for _, r := range rings {
-			for i, j := 0, len(r)-1; i < len(r); j, i = i, i+1 {
-				a, b := r[j], r[i]
-				if (a[1] > v) != (b[1] > v) {
-					u := a[0] + (v-a[1])*(b[0]-a[0])/(b[1]-a[1])
-					xs = append(xs, (u*k+ox)*float64(ss))
-				}
-			}
-		}
-		sort.Float64s(xs)
-		row := cov[(y/ss)*n:][:n]
-		for i := 0; i+1 < len(xs); i += 2 {
-			// sample centres x+0.5 that fall between the two crossings
-			lo := int(math.Max(0, math.Ceil(xs[i]-0.5)))
-			hi := int(math.Min(float64(n*ss), math.Ceil(xs[i+1]-0.5)))
-			for x := lo; x < hi; x++ {
-				row[x/ss] += per
-			}
-		}
-	}
-	return cov
-}
-
-// parse reads the path out of one of the SVGs: absolute M, L, C and Z
-// commands, each curve cut into short segments, one polygon per subpath.
-func parse(svg string) [][][2]float64 {
-	d := svg[strings.Index(svg, ` d="`)+4:]
-	d = d[:strings.IndexByte(d, '"')]
-	f := strings.Fields(strings.NewReplacer("M", " M ", "L", " L ", "C", " C ", "Z", " Z ").Replace(d))
-	num := func(i int) float64 { x, _ := strconv.ParseFloat(f[i], 64); return x }
-	var rings [][][2]float64
-	var pts [][2]float64
-	cmd := ""
-	for i := 0; i < len(f); {
-		if c := f[i]; c == "M" || c == "L" || c == "C" || c == "Z" {
-			cmd = c
-			i++
-		}
-		switch cmd {
-		case "M", "L":
-			if cmd == "M" && len(pts) > 0 {
-				rings, pts = append(rings, pts), nil
-			}
-			pts = append(pts, [2]float64{num(i), num(i + 1)})
-			i += 2
-			cmd = "L" // further pairs after M are lines
-		case "C":
-			p := pts[len(pts)-1]
-			c := [8]float64{p[0], p[1], num(i), num(i + 1), num(i + 2), num(i + 3), num(i + 4), num(i + 5)}
-			for s := 1; s <= 8; s++ {
-				t := float64(s) / 8
-				m := 1 - t
-				pts = append(pts, [2]float64{
-					m*m*m*c[0] + 3*m*m*t*c[2] + 3*m*t*t*c[4] + t*t*t*c[6],
-					m*m*m*c[1] + 3*m*m*t*c[3] + 3*m*t*t*c[5] + t*t*t*c[7],
-				})
-			}
-			i += 6
-		case "Z":
-			if len(pts) > 0 {
-				rings, pts = append(rings, pts), nil
-			}
-		}
-	}
-	if len(pts) > 0 {
-		rings = append(rings, pts)
-	}
-	return rings
-}
-
 // roundRect is a rounded square: true inside it.
 func roundRect(px, py, x, y, w, h, r float64) bool {
 	if px < x || py < y || px > x+w || py > y+h {
 		return false
 	}
+	if r <= 0 {
+		return true
+	}
 	cx := math.Max(x+r, math.Min(px, x+w-r))
 	cy := math.Max(y+r, math.Min(py, y+h-r))
 	return math.Hypot(px-cx, py-cy) <= r
+}
+
+func main() {
+	var img image.Image
+	switch {
+	case len(os.Args) == 3 && os.Args[1] == "tray":
+		img = tray()
+	case len(os.Args) == 3 && os.Args[1] == "tray-flap":
+		if err := trayFlap(os.Args[2], 44); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) == 4 && os.Args[1] == "tray-flap":
+		n, _ := strconv.Atoi(os.Args[3])
+		if err := trayFlap(os.Args[2], n); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) == 4 && os.Args[1] == "glyph":
+		n, _ := strconv.Atoi(os.Args[2])
+		img = glyph(n)
+	case len(os.Args) == 4 && (os.Args[1] == "app" || os.Args[1] == "app-dark"):
+		// one tile in either appearance: the mark is its own artwork, and
+		// macOS 26's dark Dock comes from AppIcon.icon, not a second tile
+		n, _ := strconv.Atoi(os.Args[2])
+		img = app(n)
+	case len(os.Args) == 4 && os.Args[1] == "full":
+		n, _ := strconv.Atoi(os.Args[2])
+		img = full(n)
+	case len(os.Args) == 3 && os.Args[1] == "favicon":
+		if err := favicon(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) == 4 && os.Args[1] == "win":
+		n, _ := strconv.Atoi(os.Args[2])
+		img = win(n)
+	case len(os.Args) == 3 && os.Args[1] == "win-ico":
+		if err := winICO(os.Args[2], trayICOSizes); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	default:
+		fmt.Fprintln(os.Stderr, "usage: gen.go tray <out.png> | gen.go app|app-dark|win|full <size> <out.png> | gen.go tray-flap <dir> [size] | gen.go glyph <size> <out.png> | gen.go favicon <out.svg> | gen.go win-ico <out.ico>")
+		os.Exit(2)
+	}
+	f, err := os.Create(os.Args[len(os.Args)-1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
