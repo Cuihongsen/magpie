@@ -212,14 +212,16 @@ Releases：
 - 安装文件是固定名 `magpie-darwin-arm64.zip`（`update.AppAsset()`），
   hash 取自发布里的 `SHA256SUMS.txt`；CI 现在同时上传这个固定名和带版本
   号的副本。
-- 不要求官方 ed25519 签名（密钥只在 yetone 的仓库里），但代码签名照旧
-  校验：ad-hoc 构建只能替换 ad-hoc 构建；GitHub 的构建归属仍可在
-  Actions 里查。
+- Release 必须带 fork 自己的 `SHA256SUMS.txt.sig`：构建内置公钥，
+  检查版本与清单绑定的 Ed25519 签名，然后按清单校验下载的 ZIP。
+  签名私钥保存在 GitHub Actions secret 和本机受限目录；无签名的旧
+  Release 会被新构建拒绝。macOS 包还会校验代码签名。
 - Stable/Daily 频道和“What's new”的官方历史 notes 在 fork 模式下不再
   参与；发布页链接改指本 fork。
 
 CI 的 `Fork package` 在 `v*` tag 上会创建 Release 并上传 zip、dmg、
-`INSTALL.txt`、`SHA256SUMS.txt`，正好是更新器要的形状。
+`INSTALL.txt`、`SHA256SUMS.txt` 和签名；先上传到草稿，完整后再公开。
+日常推送 `main` 或维护分支也会触发 Apple Silicon 打包。
 
 ## 行为
 

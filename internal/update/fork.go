@@ -18,12 +18,9 @@ import (
 //
 // The fork's CI publishes magpie-darwin-arm64.zip and SHA256SUMS.txt on
 // each tag; the release is read from GitHub's API and each file is
-// checked against that list. No ed25519 signature is asked for: the
-// official key lives only in yetone/magpie-releases' secrets, and this
-// fork's releases are built by its owner's workflow (GitHub's own
-// attestation of the build is still there to look at). The bundle's code
-// signature is checked as ever, so an ad-hoc signed app replaces only an
-// ad-hoc signed one.
+// checked against that list after verifying SHA256SUMS.txt.sig with
+// forkSigningKey. The bundle's code signature is checked as ever, so an
+// ad-hoc signed app replaces only an ad-hoc signed one.
 //
 // A var, and not a const, so a test can set it and a release build can
 // name another repository.
@@ -36,7 +33,7 @@ func Fork() bool { return forkRepo != "" }
 const forkSums = "SHA256SUMS.txt"
 
 // forkLatest is githubLatest for the fork's own repository: the newest
-// release, its files named by SHA256SUMS.txt, no signature required.
+// release, its files named by the signed SHA256SUMS.txt.
 func forkLatest(ctx context.Context, lang string) (*Release, error) {
 	rel, err := forkRelease(ctx)
 	if err != nil {
@@ -50,29 +47,22 @@ func forkLatest(ctx context.Context, lang string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", forkSums, err)
 	}
-	byName := map[string]Asset{}
-	for name, a := range rel.Assets {
-		byName[name] = a
+	sigAsset, ok := rel.Assets[forkSums+".sig"]
+	if !ok {
+		return nil, fmt.Errorf("release %s has no %s.sig", rel.Version, forkSums)
 	}
-	rel.Assets = map[string]Asset{}
-	for _, line := range strings.Split(sums, "\n") {
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			continue
-		}
-		name := strings.TrimPrefix(f[1], "*")
-		a, ok := byName[name]
-		if !ok || name == forkSums || strings.ContainsAny(name, `/\`) {
-			continue
-		}
-		a.SHA256 = strings.ToLower(f[0])
-		rel.Assets[name] = a
+	sig, err := githubFile(ctx, sigAsset.URL, sigAsset.API)
+	if err != nil {
+		return nil, fmt.Errorf("%s.sig: %w", forkSums, err)
 	}
-	if _, ok := rel.Assets[AppAsset()]; !ok {
-		return nil, fmt.Errorf("release %s has no %s", rel.Version, AppAsset())
-	}
+	rel.Signed = &Signed{Sums: sums, Sig: sig}
 	if err := rel.verify(); err != nil {
 		return nil, err
+	}
+	delete(rel.Assets, forkSums)
+	delete(rel.Assets, forkSums+".sig")
+	if _, ok := rel.Assets[AppAsset()]; !ok {
+		return nil, fmt.Errorf("release %s has no %s", rel.Version, AppAsset())
 	}
 	rel.Notes = InLang(rel.Notes, lang)
 	return rel, nil
