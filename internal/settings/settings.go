@@ -322,6 +322,11 @@ type Settings struct {
 	// one that runs it (gateway.hubOnDemand; ArvinCharl on X: the tools
 	// filled the context). This computer's own (KeepOwn).
 	RouterAllTools bool `json:"routerAllTools,omitempty"`
+	// Name is what this magpie is called, said in its web page's browser
+	// tab as "<name> · magpie", to tell several deployed ones apart
+	// (starballl on X). "" is MAGPIE_NAME, else none (InstanceName). This
+	// computer's own (KeepOwn): each magpie is named on its own.
+	Name string `json:"name,omitempty"`
 	// Port is the gateway's port on this computer, 0 for DefaultPort.
 	// MAGPIE_ADDR, where it is set, comes first (GatewayAddr).
 	Port int `json:"port,omitempty"`
@@ -634,7 +639,7 @@ type Settings struct {
 	ImageTimeout int `json:"imageTimeout,omitempty"`
 	// ClassifyTimeout is how long, in seconds, a routing group's classifier
 	// is given to say which intent a turn is (#2934: a Kiro subscription's
-	// haiku needed more than 8): from 1 to ClassifyTimeoutMost, 0 for
+	// haiku needed more than 8, the default then): from 1 to ClassifyTimeoutMost, 0 for
 	// ClassifyTimeoutDefault. ClassifyWait reads it.
 	ClassifyTimeout int `json:"classifyTimeout,omitempty"`
 	// GroupSink, GroupFirstToken and GroupPatience are what every routing
@@ -931,6 +936,12 @@ type Settings struct {
 	// magpie's, not a ChatGPT account's sealed one). "" leaves each on the
 	// session's model.
 	CodexCompactModel string `json:"codexCompactModel,omitempty"`
+	// CodexSuggestions is the model the Codex app's prompt suggestions
+	// (its background ambient_suggestions turn, which reads the project
+	// and connected apps, and their safety check) go on: "" as Codex
+	// sends them, else a model's id (provider/model, group/<id>). Codex's
+	// own Settings › Configuration › Homepage suggestions turns them off.
+	CodexSuggestions string `json:"codexSuggestions,omitempty"`
 	// FullContext has Codex, Claude Code and Grok Build told a model's whole context
 	// window. Off, a window above WorkingWindow is told as WorkingWindow,
 	// so they compact a long conversation there instead of sending ever
@@ -1521,9 +1532,13 @@ const BusyLoadMost = 10000
 // ClassifyTimeoutDefault is the seconds a classifier is given when
 // ClassifyTimeout is 0, and ClassifyTimeoutMost the most it can be set to:
 // the turn waits on it before it goes anywhere, with nothing sent to its
-// agent meanwhile.
+// agent meanwhile. 15, not 8: a classifier that reasons before it answers
+// (MiniMax thinks even asked for none; Grok 4.6 and GPT-6 Luna go no lower
+// than low) took 4 to 10 seconds over a real routing prompt, so 8 cut it
+// off on most turns and the group lost its intent routing (ESern29751 on
+// X). One that doesn't reason answers in a second or two either way.
 const (
-	ClassifyTimeoutDefault = 8
+	ClassifyTimeoutDefault = 15
 	ClassifyTimeoutMost    = 60
 )
 
@@ -1776,7 +1791,7 @@ func (s Settings) Compact() int {
 // place and whether it was maximised, the proxy (and plugin downloads'), the gateway's port, whether it
 // is shared on the local network and the addresses let in to it, the
 // address Claude Desktop is pointed at (DesktopGateway), what
-// its MCP router says of itself, the Dock, gateway mode, whether WSL is
+// its MCP router says of itself, what this magpie is called (Name), the Dock, gateway mode, whether WSL is
 // looked in, whether agents' sign-ins are read, when allowances are read, the terminal app a session resumes
 // in, the quick panel's shortcut, whether the local masking model is on
 // (it is downloaded on this computer alone), how many Claude Code processes may run (its memory),
@@ -1805,6 +1820,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.LAN, s.AllowIPs, s.MTLS, s.HTTPS = cur.LAN, cur.AllowIPs, cur.MTLS, cur.HTTPS
 	s.DesktopGateway = cur.DesktopGateway // an address of this computer
 	s.RouterNote, s.RouterAllTools = cur.RouterNote, cur.RouterAllTools
+	s.Name = cur.Name // what this magpie is called
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal
 	s.CodexOpen = cur.CodexOpen
@@ -2774,6 +2790,10 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if s.CodexCompactModel != "" && !strings.Contains(s.CodexCompactModel, "/") {
 		return fmt.Errorf("the model for Codex's compaction must be a model's id such as deepseek/deepseek-v4, not %q", s.CodexCompactModel)
 	}
+	s.CodexSuggestions = strings.TrimSpace(s.CodexSuggestions)
+	if s.CodexSuggestions != "" && !strings.Contains(s.CodexSuggestions, "/") {
+		return fmt.Errorf("the model for Codex's prompt suggestions must be a model's id such as deepseek/deepseek-v4, not %q", s.CodexSuggestions)
+	}
 	s.DesktopSubagentEffort = strings.ToLower(strings.TrimSpace(s.DesktopSubagentEffort))
 	if e := s.DesktopSubagentEffort; e != "" && (!slices.Contains(catalog.EffortRank, e) || e == "ultra") {
 		return fmt.Errorf("%q is not a reasoning effort for Claude Desktop's subagents", e)
@@ -2926,6 +2946,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 }
 
 func (s Settings) normal() Settings {
+	s.Name = CleanName(s.Name)
 	if s.Theme == "" {
 		s.Theme = "system"
 	}

@@ -31,7 +31,7 @@ var Keys = []string{
 	"theme", "accent", "colorblind", "reduceMotion", "noBird", "lang", "uiFont", "codeFont",
 	// the tray, the Dock and this computer
 	"tray", "dock", "dockWindow", "dockNever", "lightweight", "keepAwake", "keepAwakeDisplay",
-	"noWSLAgents", "sessionTerminal", "signInLinkOnly", "quitNoAsk", "restoreOnQuit",
+	"noWSLAgents", "sessionTerminal", "signInLinkOnly", "quitNoAsk", "restoreOnQuit", "name",
 	// the menu bar's allowance cards
 	"trayUsages", "trayUsage", "trayUsageEvery", "trayNoLogos", "trayNoBird", "trayNoNumber", "trayPace", "trayNoCost", "trayWindows",
 	// usage and alerts
@@ -240,6 +240,11 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["accent"]; !sent {
 		in.Accent = cur.Accent
 	}
+	// nor what this magpie is called, which pages before it never sent
+	// (starballl on X): a page that leaves it out keeps it
+	if _, sent := fields["name"]; !sent {
+		in.Name = cur.Name
+	}
 	// nor whether the loading bird is kept off
 	if _, sent := fields["noBird"]; !sent {
 		in.NoBird = cur.NoBird
@@ -381,6 +386,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.CodexTitles = cur.CodexTitles             // set on its own (codex-titles)
 	in.CodexDescriptions = cur.CodexDescriptions // set on its own (codex-descriptions)
 	in.CodexPredictions = cur.CodexPredictions   // and codex-predictions
+	in.CodexSuggestions = cur.CodexSuggestions   // and codex-suggestions
 	// and so is the model Codex's auto-review runs on (codex-auto-review)
 	in.CodexAutoReview = cur.CodexAutoReview
 	// and the models Codex's and Desktop's subagents are put on, set

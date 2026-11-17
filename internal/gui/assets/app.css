@@ -558,8 +558,19 @@ body.side-nav #nav button.has-dot.can-fold::after { right: 28px; }
     background: radial-gradient(36px 400px at var(--lx) 50%, var(--hot) 0%, var(--hot) 12%, color-mix(in oklab, var(--hot) 45%, var(--far)) 45%, var(--far) 100%);
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
+  /* the row's icon takes the light too, from its own ink: as bright as the
+     word would be at its middle (--iw, navlamp.js), and with no lag of its
+     own, since the light already moves */
+  :is(.nav-s, #nav button, #prefs) > :is(svg, .nav-ic, .nav-s-ic).lit {
+    --lo: var(--muted);
+    --hi: var(--fg);
+    --hot: color-mix(in oklab, var(--hi) calc(var(--si) * 100%), var(--lo));
+    --far: color-mix(in oklab, var(--fg) calc(var(--si) * 15%), var(--lo));
+    color: color-mix(in oklab, var(--hot) calc(var(--iw) * 100%), var(--far));
+    transition: none;
+  }
 }
-@supports (color: oklch(from red round(l) c h)) { :is(.nav-s, #nav button, #prefs, .side-gw) > span.lit { --hi: oklch(from var(--fg) round(l) 0 h); } }
+@supports (color: oklch(from red round(l) c h)) { :is(.nav-s, #nav button, #prefs, .side-gw) > span.lit, :is(.nav-s, #nav button, #prefs) > :is(svg, .nav-ic, .nav-s-ic).lit { --hi: oklch(from var(--fg) round(l) 0 h); } }
 /* a row pressed darkens, as a Mac sidebar's does: it never shrinks the way a
    button does (.seg button:active, .icon:active below) */
 body.side-nav #side button:active { transform: none; }
@@ -1716,7 +1727,7 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
    rule and draws the system's bar under the weeks, not the app's thin thumb
    every other list has (cybercaius on Discord) */
 .heat-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; padding-bottom: 4px; }
-.heat-grid { display: grid; grid-template-columns: auto repeat(53, minmax(10px, 1fr)); grid-template-rows: auto repeat(7, auto); gap: 3px; min-width: min-content; max-width: calc(3em + 53 * 21px); font-size: 10px; color: var(--muted); }
+.heat-grid { display: grid; grid-template-columns: auto repeat(var(--wk, 53), minmax(10px, 1fr)); grid-template-rows: auto repeat(7, auto); gap: 3px; min-width: min-content; max-width: calc(3em + var(--wk, 53) * 21px); font-size: 10px; color: var(--muted); }
 .heat-grid i { aspect-ratio: 1; border-radius: 3px; min-width: 0; }
 .heat-grid i:hover { outline: 1px solid var(--fg-2); outline-offset: -1px; }
 /* the days of the week stay at the card's edge as the weeks scroll under them */
@@ -3682,16 +3693,16 @@ body.side-nav #addSheet .add-tools.afloat > * { pointer-events: auto; --wails-dr
 body.side-nav #addSheet .add-tools.afloat > .find { flex: 0 1 var(--hint-w, 180px); min-width: 120px; }
 /* a narrow window has no room in its bar: the sheet's head stays at the
    top while the sheet is under it, as Settings' does */
-body:not(.side-nav) #addSheet > .row-head { position: sticky; top: 0; z-index: 5; --bleed-l: 12px; --bleed-r: 12px; }
-body.window:not(.side-nav) #addSheet > .row-head { top: -2px; --bleed-l: 16px; --bleed-r: 16px; }
+body:not(.side-nav) #addSheet > .row-head { position: sticky; top: 0; z-index: 5; }
+body.window:not(.side-nav) #addSheet > .row-head { top: -2px; }
 body:not(.side-nav) #addSheet > .row-head::before {
   content: ""; position: absolute; z-index: -1; pointer-events: none;
-  top: -6px; bottom: -6px; left: calc(-1 * var(--bleed-l)); right: calc(var(--bar, 0px) - var(--bleed-r));
+  top: -6px; bottom: -6px; left: -6px; right: -6px; border-radius: 0 0 13px 13px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   -webkit-backdrop-filter: saturate(1.6) blur(16px); backdrop-filter: saturate(1.6) blur(16px);
-  box-shadow: 0 1px 0 transparent; transition: box-shadow .18s var(--ease);
+  box-shadow: 0 1px 0 transparent; opacity: 0; transition: opacity .18s var(--ease-out), box-shadow .18s var(--ease);
 }
-body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 var(--line-2); }
+body:not(.side-nav) #addSheet > .row-head.stuck::before { opacity: 1; box-shadow: 0 1px 0 var(--line-2); }
 @supports not (color: color-mix(in srgb, red 50%, blue)) { body:not(.side-nav) #addSheet > .row-head::before { background: var(--bg); } }
 /* the provider editor, in a dialog */
 /* the label column is as wide as its longest label, so that label starts
@@ -4061,6 +4072,7 @@ body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 va
 /* how a model answered Test models: a dot after its name */
 .mchip .tdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--faint); }
 .mchip .tdot.ok { background: var(--green); }
+.mchip .tdot.queued { background: var(--amber); }
 .mchip .tdot.bad { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
 .mchip .tdot.wait { animation: tdot 1s ease-in-out infinite alternate; }
 @keyframes tdot { to { opacity: .25; } }
@@ -4173,21 +4185,23 @@ body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 va
 /* with the tabs across the top (the sidebar has them in the title bar) the
    parts' tabs and the search stay at the top of the page while a long part
    (About) scrolls under them, on the frosted strip the Library's and the
-   Plugins' tabs have (.lib-head), a hairline once something is beneath
-   (#2396). The strip is the head's ::before, reaching over the view's
-   padding and the head's margins so no row shows through above or below
-   it; at the page's top it is the page's own colour, nothing moved. The
+   Plugins' tabs have (.lib-head), shown with a hairline once something is
+   beneath (#2396). The strip is the head's ::before, reaching over the
+   head's margins so no row shows through above or below it, 6px out from
+   the tabs (the first sits 7px out) and the search at the sides as at the
+   foot, rounded by their 7px plus those 6px; at the page's top it is not
+   drawn, nothing moved. The
    window's view is padded 2px at the top: the head stops over it */
-body:not(.side-nav) #view-settings .set-head { position: sticky; top: 0; z-index: 5; --bleed-l: 12px; --bleed-r: 12px; }
-body.window:not(.side-nav) #view-settings .set-head { top: -2px; --bleed-l: 16px; --bleed-r: 16px; }
+body:not(.side-nav) #view-settings .set-head { position: sticky; top: 0; z-index: 5; }
+body.window:not(.side-nav) #view-settings .set-head { top: -2px; }
 body:not(.side-nav) #view-settings .set-head::before {
   content: ""; position: absolute; z-index: -1; pointer-events: none;
-  top: -6px; bottom: -6px; left: calc(-1 * var(--bleed-l)); right: calc(var(--bar, 0px) - var(--bleed-r));
+  top: -6px; bottom: -6px; left: -13px; right: -6px; border-radius: 0 0 13px 13px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   -webkit-backdrop-filter: saturate(1.6) blur(16px); backdrop-filter: saturate(1.6) blur(16px);
-  box-shadow: 0 1px 0 transparent; transition: box-shadow .18s var(--ease);
+  box-shadow: 0 1px 0 transparent; opacity: 0; transition: opacity .18s var(--ease-out), box-shadow .18s var(--ease);
 }
-body:not(.side-nav) #view-settings .set-head.stuck::before { box-shadow: 0 1px 0 var(--line-2); }
+body:not(.side-nav) #view-settings .set-head.stuck::before { opacity: 1; box-shadow: 0 1px 0 var(--line-2); }
 @supports not (color: color-mix(in srgb, red 50%, blue)) { body:not(.side-nav) #view-settings .set-head::before { background: var(--bg); } }
 .set-q { flex: 0 1 180px; margin-left: auto; min-width: 120px; }
 .set-searching .set-tabs { display: none; }
@@ -5097,6 +5111,15 @@ body.panel .modal { padding: 16px 12px; }
 .pu-card .led-bar .segs .opt { height: 20px; padding: 0 8px; font-size: 11px; }
 .pu-card .led-chart .plot { height: 124px; }
 .pu-card .led-rank { margin-top: 4px; }
+/* the recent weeks' heatmap under the chart: the weeks fill the card, no
+   sideways scroll, the days' names plain beside them */
+/* the panel's light pills are its cards' white: a quiet day is a shade off it */
+.pu-heat { position: relative; padding: 8px 10px 6px; border-radius: 11px; background: var(--card); box-shadow: var(--card-edge); --pill: color-mix(in srgb, var(--fg) 7%, var(--card)); }
+.pu-heat[hidden] { display: none; }
+.pu-heat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 1px 0 6px; font-size: 11.5px; }
+.pu-heat-head b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pu-heat .heat-grid { max-width: none; min-width: 0; padding-bottom: 4px; }
+.pu-heat .heat-grid .wd { position: static; background: none; box-shadow: none; }
 .pu-none { margin: 0; padding: 12px; border-radius: 11px; background: var(--card); box-shadow: var(--card-edge); font-size: 12px; line-height: 1.55; color: var(--muted); }
 .pu-none b { display: block; color: var(--fg); font-weight: 550; }
 .skeleton.pu-sk { height: 52px; border-radius: 11px; }
@@ -5615,7 +5638,23 @@ body.linux:not(.side-nav) #view-settings .set-head::before,
 body.linux .action-confirm::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
 /* what syncs (#6428): the keys' tick under Providers; a preview's items */
 .editor.sync-form .sync-sub-tick { padding-left: 22px; }
+.editor.sync-form .sync-except { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.editor.sync-form .sync-except[hidden] { display: none; }
+.sync-except .proto.pick { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 6px 0 9px; font: inherit; font-size: 12px; color: var(--fg-2); border: 0; border-radius: 7px; background: var(--pill); cursor: default; transition: background .12s, color .12s; }
+.sync-except .proto.pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-except .proto.pick svg { flex: none; opacity: .7; transition: transform .15s var(--ease); }
+.sync-except .proto.pick.open svg { transform: rotate(180deg); }
+.sync-except .proto.pick:hover, .sync-except .proto.pick.open { color: var(--fg); background: var(--pill-hover); }
+.sync-except .proto.pick.busy { opacity: .6; }
 .sync-preview .sync-items { display: grid; gap: 2px; margin: -2px 0 8px; padding: 6px 10px; border-radius: 8px; background: var(--pill); font-size: 12.5px; max-height: 180px; overflow-y: auto; }
 .sync-preview .sync-item { display: flex; justify-content: space-between; gap: 12px; min-width: 0; }
 .sync-preview .sync-item span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sync-preview .sync-item .sub, .sync-preview .sync-items > .sub, .sync-preview .lib-confirm.sub { color: var(--muted); }
+
+/* Speed beside Model and Effort (Tengs999 on X): the bolt and what decides it */
+.field.ag-speed .v { display: inline-flex; align-items: center; gap: 3px; }
+.field.ag-speed .v svg, .field.ag-speed .v .bolts { flex: none; color: var(--accent); }
+.field.ag-speed .v path { fill: currentColor; }
+.field.ag-speed .v .bolts { display: inline-flex; }
+.field.ag-speed .v .bolts svg + svg { margin-left: -5px; }
+.field.ag-speed .ag-speed-by { color: var(--faint); font-weight: 400; white-space: pre; }
