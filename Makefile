@@ -78,6 +78,14 @@ icons:
 	@go run build/icon/gen.go win-ico internal/gui/icon-windows.ico
 	@go run build/icon/gen.go app 1024 internal/gui/icon-1024.png
 	@go run build/icon/gen.go app 256 internal/gui/icon-256.png
+	@# the page's and the site's icons: the mark on the app's grid for the
+	@# tab and the site's logo, full-bleed for the launchers that mask it
+	@# themselves, and the favicon as an SVG carrying the mark
+	@go run build/icon/gen.go app 256 site/public/img/icon-256.png
+	@go run build/icon/gen.go app 64 site/public/favicon.png
+	@go run build/icon/gen.go full 512 internal/gui/assets/icons/icon-512.png
+	@go run build/icon/gen.go full 180 internal/gui/assets/icons/apple-touch-icon.png
+	@go run build/icon/gen.go favicon internal/gui/assets/icons/favicon.svg
 	@rm -rf build/darwin/magpie.iconset && mkdir -p build/darwin/magpie.iconset
 	@for s in 16 32 128 256 512; do \
 		go run build/icon/gen.go app $$s build/darwin/magpie.iconset/icon_$${s}x$${s}.png; \
