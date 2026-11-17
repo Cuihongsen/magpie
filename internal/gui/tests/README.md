@@ -1,5 +1,43 @@
 # Dropdown browser regression
 
+`provider-crazy-retry.test.cjs` runs with `node --test` and needs no browser.
+It exercises the shipped draft reader, native field helpers and Save handler
+in Node: off/50 defaults, zero and empty counts, enabled/disabled settings,
+integer validation, save/reopen and all five languages. `crazy_retry_test.go`
+drives the real provider save route and reads saved settings back into the
+editor response, including omitted fields, copies and presets. These tests
+do not check browser layout or gateway retry execution.
+
+`provider-crazy-retry-browser.test.cjs` checks the complete provider editor
+and Save flow for built-in accounts, plugin accounts and API key providers
+in all five languages, on headless Chromium and WebKit launched from the CLI.
+It checks real numeric `badInput` (typing `1e` leaves an empty value), refusing
+the save and focusing its inline error, then accepting a genuinely empty field.
+It also covers off/50 defaults, retaining a count while off, reopening,
+and 1/100/0 boundaries. All API requests use isolated fixtures and no user
+browser is opened. The Go copy tests check omitted-field inheritance and
+explicit false/0 overrides through the real save API.
+
+The provider editor is part of the core page, so its retry controls and
+validation stay synchronous beside the other settings. The core script limit
+is raised by exactly 1,264 bytes to 1,535,066 for this addition, with no spare
+room added. Sharing the controls and validation with the account editor adds
+171 bytes, for an effective limit of 1,535,237; the separate app.js limit is
+unchanged.
+
+The error recovery cooldown lives beside retry controls for ordinary providers
+and built-in/plugin accounts. `errorCooldownSeconds` is an integer: 0 keeps
+native recovery, and 1–3600 sets seconds (15 is supported). Its help names
+upstream 4xx/5xx only and excludes replaying canceled or already-output requests.
+`error_cooldown_test.go` checks default/save/reopen, omitted-field preservation,
+explicit zero, copy inheritance, presets and invalid API values. The Node and
+headless browser tests above also cover this field, including genuine
+`badInput`, integer boundaries, five languages and both account branches.
+Retry help distinguishes a fixed 100ms interval within one request, ignoring a
+longer Retry-After, from the separate channel recovery cooldown (such as 15s).
+Gateway execution of recovery remains outside these GUI tests. The synchronous
+editor controls add 1,047 bytes, bringing the effective core script limit to
+1,536,284, with no spare room added.
 `agent-details-ready.test.cjs` holds the first settings read and the lazy
 Long conversations module on the main window's Agents → Details path. It
 checks a complete first and warm opening without a final height jump in all
@@ -7,7 +45,6 @@ five languages, wide and narrow, Chromium and WebKit. It also covers Claude
 Code and Grok Build, failed-read retry, a superseding agent click, navigation
 away and reduced motion. `MAGPIE_ASSETS` selects older assets for the failing
 regression comparison; `ARTIFACT_DIR` retains Chinese desktop screenshots.
-
 `modal-backdrop.test.cjs` checks the modal's computed backdrop filter using
 the real stylesheet and platform marker: Windows desktop windows and panels
 keep the dimming veil without filtering, while browser pages, macOS and Linux
@@ -1047,7 +1084,7 @@ never NaN, which it said while the answer left `done` out. The click doesn't
 move the page. English and Chinese.
 
 `update-auto.test.cjs` checks Settings → Automatic updates (#472): on, every
-6 h, with nothing set; Check every saves 30 min, 1 h, 6 h or 24 h; Off is
+6 h, with nothing set; Update check interval saves 30 min, 1 h, 6 h or 24 h; Off is
 saved and kept through a reload, the interval staying in place, dimmed, for
 when it is on again; the version row, not asked yet, says automatic updates
 are off and its Check asks the backend. No click moves the page. English and
@@ -1650,6 +1687,12 @@ sessions/codex-provider with each id and Codex's provider, and Undo posts
 each back to the provider it had. No click moves the page, no left-border
 accent, every string in Chinese, Japanese and German. Chromium and WebKit,
 English and Chinese, API faked.
+
+`sessions-codex-provider-stuck.test.cjs` checks the refusal of a Codex
+session that can't move at all (a paginated rollout with no row in Codex's
+database, @xMopf7RF on X): the status says why, that it stays on its
+provider, and that Delete clears it into magpie's trash. All five
+languages, 900px and 420px, Chromium and WebKit, API faked.
 
 `sessions-toolbar.test.cjs` uses ten agents to check that fitting tabs stay
 visible at 1800px, while 900, 660 and 320px windows use a compact agent menu.

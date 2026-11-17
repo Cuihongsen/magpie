@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,6 +52,16 @@ func (l Listing) Get(name string) (Stat, bool) {
 // A caller done reading the listing gives it back (Done) for the next.
 func Stats(dir string) (Listing, bool) {
 	old, room := taken(dir)
+	if old != nil && current(dir, old) {
+		if room != nil {
+			listings.Lock()
+			keepSpare(dir, room)
+			listings.Unlock()
+		}
+		return old, true
+	}
+	seq := begin(dir)
+	reads.Add(1)
 	l, ok := stats(dir, room, old)
 	if old != nil {
 		listings.Lock()
@@ -61,7 +72,18 @@ func Stats(dir string) (Listing, bool) {
 		return nil, false
 	}
 	slices.SortFunc(l, func(a, b Entry) int { return cmp.Compare(a.Name, b.Name) })
+	mark(l, seq)
 	return l, true
+}
+
+// Each gives f each entry of dir as Stats has it, in the order the
+// system lists them, with nothing made for an entry: name is valid only
+// during the call, and f copies what it keeps of it. f returning false
+// stops the listing. ok is false where Stats' is: the system has no such
+// listing, or the folder or an entry couldn't be read (some entries may
+// have been given f by then).
+func Each(dir string, f func(name string, s Stat) bool) (ok bool) {
+	return eachIn(dir, f)
 }
 
 // listings are Stats' answers given back: a listing made new for each
@@ -85,6 +107,9 @@ var listings struct {
 }
 
 const keptEntries = 1 << 17
+
+// reads counts the folders Stats has read, for the tests.
+var reads atomic.Int64
 
 // taken is dir's last listing and room for its next, each taken from
 // what is kept, or none.
@@ -181,4 +206,5 @@ func Forget() {
 	listings.Lock()
 	listings.last, listings.spare, listings.room, listings.entries = nil, nil, nil, 0
 	listings.Unlock()
+	forgetListed()
 }

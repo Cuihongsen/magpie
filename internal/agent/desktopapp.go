@@ -114,7 +114,21 @@ var desktopApps = map[string]desktopApp{
 	// with its "/" taken out (getWindowsInstallationDirName; the README's
 	// own path); guid is the UUID v5 of the appId, as dsh's above.
 	"craft-agents": {id: "com.lukilabs.craft-agent", names: []string{"Craft Agents.app"}, win: filepath.Join("@craft-agentelectron", "Craft Agents.exe"), guid: "61dc82ee-e3b9-557b-98c4-20b9178a0f78"},
-	"penguin":      {id: "com.prismshadow.penguinharness", names: []string{"PenguinHarness.app"}, win: filepath.Join("PenguinHarness", "PenguinHarness.exe"), guid: "8bb9acb7-2bdc-596b-9669-7b014ab1c47f"},
+	// Tuanjie Cowork (2.1.6-stable: Tuanjie Cowork.app,
+	// dev.codelycowork.desktop, a Tauri app) reads ~/.codely on its own
+	// (tuanjiecowork.go). Its Windows build is a Tauri NSIS installer, whose
+	// per-user folder isn't under %LOCALAPPDATA%\Programs, so on Windows
+	// it is found by its ~/.codely folder alone.
+	"tuanjie-cowork": {id: "dev.codelycowork.desktop", names: []string{"Tuanjie Cowork.app"}},
+	// Kun (electron-builder.config.cjs, 0.4.5: appId
+	// com.xingyuzhong.deepseekgui from its DeepSeek GUI days, productName
+	// Kun, package kun-gui). Its Windows installer is a per-user assisted
+	// NSIS one, so it goes to %LOCALAPPDATA%\Programs\Kun unless the user
+	// picks another folder; guid is the UUID v5 of the appId, as dsh's
+	// above. Its deb installs /opt/Kun, with the kun:// scheme.
+	"kun": {id: "com.xingyuzhong.deepseekgui", names: []string{"Kun.app"}, win: filepath.Join("Kun", "Kun.exe"), guid: "af3c880c-15f8-5a1f-a7e8-6e299ab90803",
+		onLinux: &linuxApp{dirs: []string{"/opt/Kun"}, exe: "kun-gui", name: "Kun", scheme: "kun"}},
+	"penguin": {id: "com.prismshadow.penguinharness", names: []string{"PenguinHarness.app"}, win: filepath.Join("PenguinHarness", "PenguinHarness.exe"), guid: "8bb9acb7-2bdc-596b-9669-7b014ab1c47f"},
 	// The CodeBuddy IDE (Tencent's VS Code fork, 4.12.2: CodeBuddy.app,
 	// com.tencent.codebuddy, from codebuddy.ai; CodeBuddy CN.app,
 	// com.tencent.codebuddycn, from codebuddy.cn) reads the CodeBuddy Code
@@ -406,17 +420,17 @@ type keptSubs struct {
 // none elsewhere. A var so tests never ask this machine's Spotlight.
 var spotlightApps = spotlightBundles
 
-// spotlight keeps each bundle id's answer for spotlightFresh: the Agents
-// page asks whether an app is installed on every read, and an app that
-// isn't anywhere would ask mdfind each time.
+// spotlight keeps Spotlight's answer for every bundle id desktopApps
+// names, asked in one mdfind (13 one by one took ~0.7s, each request that
+// came after spotlightFresh waiting on them under the lock). An answer
+// older than spotlightFresh is still given while one goroutine asks
+// again, so only the first ask after start waits.
 var spotlight struct {
 	sync.Mutex
-	m map[string]spotlightAnswer
-}
-
-type spotlightAnswer struct {
-	paths []string
-	at    time.Time
+	m       map[string][]string
+	at      time.Time
+	asking  bool
+	settled chan struct{}
 }
 
 const spotlightFresh = 5 * time.Minute
@@ -426,33 +440,113 @@ const spotlightFresh = 5 * time.Minute
 // developer's own apps (#1823) from every package that asks for one.
 const spotlightSandbox = "MAGPIE_TEST_SANDBOX"
 
+// spotlightIDs are the bundle ids of every desktop app magpie knows.
+func spotlightIDs() []string {
+	var ids []string
+	for _, app := range desktopApps {
+		for _, b := range app.builds() {
+			if b.id != "" && !slices.Contains(ids, b.id) {
+				ids = append(ids, b.id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// spotlightAttr separates a path from its bundle id in mdfind -attr's
+// lines: "/Applications/ChatGPT.app   kMDItemCFBundleIdentifier = com.openai.codex".
+const spotlightAttr = "   kMDItemCFBundleIdentifier = "
+
+// spotlightAsk asks Spotlight once for the bundles of ids, by id; nil
+// when mdfind failed, so the answer before it stays.
+var spotlightAsk = func(ids []string) map[string][]string {
+	q := make([]string, len(ids))
+	for i, id := range ids {
+		q[i] = "kMDItemCFBundleIdentifier == '" + id + "'"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := proc.CommandContext(ctx, "mdfind", "-attr", "kMDItemCFBundleIdentifier", strings.Join(q, " || ")).Output()
+	if err != nil {
+		return nil
+	}
+	return spotlightParse(string(out), ids)
+}
+
+// spotlightParse reads mdfind -attr kMDItemCFBundleIdentifier's lines
+// into the paths of each of ids.
+func spotlightParse(out string, ids []string) map[string][]string {
+	m := make(map[string][]string, len(ids))
+	for _, id := range ids {
+		m[id] = nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		i := strings.LastIndex(line, spotlightAttr)
+		if i < 0 {
+			continue
+		}
+		p, id := strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+len(spotlightAttr):])
+		// an app dragged to the Trash, as a Mac app is uninstalled,
+		// is still in Spotlight: it isn't installed
+		if _, ok := m[id]; ok && p != "" && !inTrash(p) {
+			m[id] = append(m[id], p)
+		}
+	}
+	return m
+}
+
 func spotlightBundles(id string) []string {
 	if runtime.GOOS != "darwin" || os.Getenv(spotlightSandbox) != "" {
 		return nil
 	}
+	return spotlightKept(id)
+}
+
+// spotlightKept is id's bundles from the kept answer, asking Spotlight
+// (spotlightAsk) for the first or when it is older than spotlightFresh.
+func spotlightKept(id string) []string {
+	spotlight.Lock()
+	if spotlight.m != nil {
+		if time.Since(spotlight.at) >= spotlightFresh && !spotlight.asking {
+			spotlight.asking = true
+			go spotlightRefresh()
+		}
+		paths := spotlight.m[id]
+		spotlight.Unlock()
+		return paths
+	}
+	// the first ask: wait for it, once for every caller
+	if !spotlight.asking {
+		spotlight.asking = true
+		spotlight.settled = make(chan struct{})
+		go spotlightRefresh()
+	}
+	settled := spotlight.settled
+	spotlight.Unlock()
+	<-settled
 	spotlight.Lock()
 	defer spotlight.Unlock()
-	if a, ok := spotlight.m[id]; ok && time.Since(a.at) < spotlightFresh {
-		return a.paths
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	var paths []string
-	out, err := proc.CommandContext(ctx, "mdfind", "kMDItemCFBundleIdentifier == '"+id+"'").Output()
-	if err == nil {
-		for _, p := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			// an app dragged to the Trash, as a Mac app is uninstalled,
-			// is still in Spotlight: it isn't installed
-			if p = strings.TrimSpace(p); p != "" && !inTrash(p) {
-				paths = append(paths, p)
-			}
+	return spotlight.m[id]
+}
+
+// spotlightRefresh asks Spotlight for every known id and keeps the answer.
+func spotlightRefresh() {
+	m := spotlightAsk(spotlightIDs())
+	spotlight.Lock()
+	defer spotlight.Unlock()
+	if m != nil || spotlight.m == nil {
+		if m == nil {
+			m = map[string][]string{}
 		}
+		spotlight.m = m
 	}
-	if spotlight.m == nil {
-		spotlight.m = map[string]spotlightAnswer{}
+	spotlight.at = time.Now()
+	spotlight.asking = false
+	if spotlight.settled != nil {
+		close(spotlight.settled)
+		spotlight.settled = nil
 	}
-	spotlight.m[id] = spotlightAnswer{paths: paths, at: time.Now()}
-	return paths
 }
 
 // inTrash reports whether p is in a Mac's Trash: the user's ~/.Trash, or

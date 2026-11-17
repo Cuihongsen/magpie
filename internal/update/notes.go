@@ -37,7 +37,7 @@ func NotesFeed() string {
 // ReleasePage is version's page on GitHub, where its notes are when the
 // site can't give them (#661).
 func ReleasePage(version string) string {
-	return "https://github.com/yetone/magpie-releases/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
+	return "https://github.com/" + forkRepoName() + "/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
 }
 
 // NotesBetween asks the site for the notes of every release after after
@@ -52,6 +52,9 @@ func NotesBetween(ctx context.Context, after, upto, lang string) ([]Note, error)
 // all before MostNotes keeps the newest, so a list cut short can say so
 // (sujingshen on X: 156 releases behind read "40 releases").
 func NotesBetweenTotal(ctx context.Context, after, upto, lang string) ([]Note, int, error) {
+	if forkRepo != "" {
+		return nil, 0, nil // the fork's releases carry their own notes
+	}
 	q := url.Values{"upto": {upto}}
 	if after != "" {
 		q.Set("after", after)
@@ -149,32 +152,50 @@ func withLang(feed, lang string) string {
 // often, and a long-unopened one would have pages of them.
 const MaxNotes = 40
 
-// StableMaxNotes is MaxNotes on the Stable channel, where an update is a
-// week of releases and its notes are read as one list (ssharpcc on X):
-// every one of them, as far as the site keeps them.
+// StableMaxNotes is MaxNotes on the Stable and Daily channels, where an
+// update is a week or a day of releases and its notes are read as one list
+// (ssharpcc on X): every one of them, as far as the site keeps them.
 const StableMaxNotes = 1500
 
 // MostNotes is how many releases' notes are shown at most on the channel
 // Settings name.
 func MostNotes() int {
-	if Stable() {
+	if Picked() {
 		return StableMaxNotes
 	}
 	return MaxNotes
 }
 
-// Stable is whether Settings' Update channel is Stable: the update feed is
-// asked for a version a week, the newest that had been out three days as
-// the week began (Monday 00:00 UTC), or an urgent one (a security hole, a
-// ban risk, lost data) as soon as it is out. usemagpie.ai chooses it from
-// the release list (site/worker.js, "The Stable channel"); a release is
-// urgent when a line of its notes starts with "**Urgent release:**".
-func Stable() bool { return settings.Load().UpdateChannel == settings.UpdateStable }
+// Channel is Settings' Update channel: settings.UpdateStable, the update
+// feed asked for a version a week, the newest that had been out three days
+// as the week began (Monday 00:00 UTC); settings.UpdateDaily, a version a
+// day, the newest out by 20:00 UTC that passed its tests (the Test run on
+// its commit) and has every file; either one with an urgent release (a
+// security hole, a ban risk, lost data) as soon as it is out. "" is every
+// version, and so is a value magpie doesn't know. usemagpie.ai chooses
+// both from the release list (site/worker.js, "The Stable channel" and
+// "The Daily channel"); a release is urgent when a line of its notes
+// starts with "**Urgent release:**".
+func Channel() string {
+	switch c := settings.Shared().UpdateChannel; c {
+	case settings.UpdateStable, settings.UpdateDaily:
+		return c
+	}
+	return ""
+}
 
-// withChannel is feed asking for Stable's release on the Stable channel,
+// Picked is whether the update feed picks the version (Stable or Daily)
+// rather than offering every one: only the site knows a picked release.
+func Picked() bool { return Channel() != "" }
+
+// Stable is whether Settings' Update channel is Stable.
+func Stable() bool { return Channel() == settings.UpdateStable }
+
+// withChannel is feed asking for the channel's release on Stable or Daily,
 // and feed as it is on every version.
 func withChannel(feed string) string {
-	if !Stable() {
+	ch := Channel()
+	if ch == "" {
 		return feed
 	}
 	u, err := url.Parse(feed)
@@ -182,7 +203,7 @@ func withChannel(feed string) string {
 		return feed
 	}
 	q := u.Query()
-	q.Set("channel", settings.UpdateStable)
+	q.Set("channel", ch)
 	u.RawQuery = q.Encode()
 	return u.String()
 }

@@ -72,32 +72,20 @@ func aliasManaged(ms []Managed, alias func(string) string) {
 	}
 }
 
-// aliasStats is st with each day's usage and each session's models counted
-// under their aliases.
-func aliasStats(st Stats, alias func(string) string) Stats {
-	changed := slices.ContainsFunc(st.Days, func(d Day) bool {
-		return slices.ContainsFunc(d.Usage, func(u Usage) bool { return alias(u.Model) != u.Model })
-	}) || slices.ContainsFunc(st.Sessions, func(s Summary) bool {
-		return slices.ContainsFunc(s.Models, func(m string) bool { return alias(m) != m }) ||
-			slices.ContainsFunc(s.ModelEffort, func(e ModelEffort) bool { return alias(e.Model) != e.Model })
-	})
-	if !changed {
-		return st
+// aliasOwned counts st's days' usage and sessions' models under their
+// aliases, in st's own slices: st was just made and is not kept yet. The
+// Stats kept for the next read are kept as aliased (keptStats.names), so
+// no read copies every session's summary of every range again: that copy
+// was ~5 MB a long history held beside the unaliased one (#2278).
+func aliasOwned(st *Stats, alias func(string) string) {
+	for i := range st.Days {
+		st.Days[i].Usage = aliasUsage(st.Days[i].Usage, alias)
 	}
-	days := make([]Day, len(st.Days))
-	for i, d := range st.Days {
-		d.Usage = aliasUsage(d.Usage, alias)
-		days[i] = d
-	}
-	st.Days = days
-	sums := make([]Summary, len(st.Sessions))
-	for i, s := range st.Sessions {
+	for i := range st.Sessions {
+		s := &st.Sessions[i]
 		s.Models = aliasNames(s.Models, alias)
 		s.ModelEffort = aliasEffort(s.ModelEffort, alias)
-		sums[i] = s
 	}
-	st.Sessions = sums
-	return st
 }
 
 // aliasUsage is a day's usage with the rows of one agent, folder and

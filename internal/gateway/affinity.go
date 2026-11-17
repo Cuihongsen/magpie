@@ -75,10 +75,15 @@ const (
 	// cache_control's ttl "1h" (cache_creation's ephemeral_1h_input_tokens)
 	// without it being read, as Claude Code asks of a subscription (#2302)
 	cacheHour = time.Hour
-	// stickKeep is how long a conversation's last answerer is remembered.
-	stickKeep = 24 * time.Hour
+	// stickKeep is how long a conversation's last answerer is remembered,
+	// counted from its last answer: a binding in use is renewed by every
+	// answer. A long task is often picked up again after a weekend or a
+	// week, and a binding gone by then moves it to another provider, which
+	// refuses the reasoning the first sealed (invalid_encrypted_content;
+	// npikng161274 on X).
+	stickKeep = 30 * 24 * time.Hour
 	// sticksKept is how many conversations, the latest, are kept on disk.
-	sticksKept = 512
+	sticksKept = 4096
 )
 
 // coldAfter is how long p's vendor keeps a prompt cached without it being
@@ -117,7 +122,9 @@ type Affinity struct {
 	// again at a new turn: backToFirst), "back" (a member of a group
 	// routed any other way stood in for one listed ahead of it that
 	// couldn't take the conversation, and a member ahead is ready first
-	// at a new turn: backFromStandIn), "credits" (a Codex account gone
+	// at a new turn: backFromStandIn), "hours" (a group's rule by hours
+	// sent its last turn there and they are over: RuleHit.Ended),
+	// "credits" (a Codex account gone
 	// onto its credits answered it, set to spend them only after
 	// everything else, and one not on its credits leads: lastBehind),
 	// "busy" (its plugin says the model is busier than settings.BusyLoad
@@ -559,7 +566,7 @@ func stickKey(scope string, in http.Header, body []byte) string {
 // more for each 4 MB Codex request in flight. inOrder: the request is to
 // a routing group, or a provider's keys or accounts, set to In order,
 // whose order the user chose (backToFirst).
-func affine(scope, mode string, rotate, spread, inOrder bool, in http.Header, from provider.Protocol, body, written []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
+func affine(scope, mode string, rotate, spread, inOrder, hoursOver bool, in http.Header, from provider.Protocol, body, written []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
 	key := stickKey(scope, in, body)
 	a := &Affinity{Mode: mode}
 	a.Turn, a.Within = turnOf(from, written)
@@ -567,6 +574,15 @@ func affine(scope, mode string, rotate, spread, inOrder bool, in http.Header, fr
 	st, had := stickOf(key)
 	sticks.Unlock()
 	if had && time.Since(st.at) > stickKeep {
+		had = false
+	}
+	if had && mode == "" && !a.Within && (reorderedSince(st, cs) || reroutedSince(scope, st)) {
+		// the user put the accounts in another order after this
+		// conversation was last answered: the order they chose counts at
+		// its next turn, whatever the old answerer cached (Richyisaflower
+		// on X: B moved above A, the conversation went on to A); or
+		// changed the group's routing (#6708). Session and Strict, the
+		// user's own, and a turn under way keep it
 		had = false
 	}
 	if had {
@@ -667,6 +683,15 @@ func affine(scope, mode string, rotate, spread, inOrder bool, in http.Header, fr
 		// its cache as before; within a turn it stays, and Stays:
 		// Session or Strict, the user's own, keep it where it is
 		a.Why = "back"
+	case !a.Within && hoursOver && !rotate && mode == "" && at > 0:
+		// a rule's hours sent the conversation's last turn here, and they
+		// are over (RuleHit.Ended; MinglunZhu on X: a cheaper provider at
+		// night, the usual one by day): the new turn goes where the group
+		// routes it, whatever this one cached, or a conversation begun at
+		// night stayed on the night's provider all day by its cache.
+		// Within a turn it stays; Stays: Session and Strict, the user's
+		// own, keep it where it is
+		a.Why = "hours"
 	case at > 0 && pl.order[at].Known && pl.order[at].Used >= provider.SpentShareOf(cs[at].p.Routing) && !pl.order[at].CreditsFirst:
 		// all but used up, and put behind another: first still — the
 		// one key or account it has (#1016), or every one used up — it
@@ -1539,4 +1564,24 @@ func keptAgain(aff *Affinity, c candidate, hw *holdWriter, asked bool) (time.Dur
 // cases of affine read the same.
 func cacheHolds(st stick, p provider.Provider) bool {
 	return st.cacheRead+st.cacheWrite >= cacheWorth && (time.Since(st.at) <= coldAfter(p) || st.hour.warm(time.Now()))
+}
+
+// reorderedSince: the user changed the order of the accounts of the
+// provider that last answered st after it did. Only that provider's
+// reorder counts: one of another provider's moves no conversation here.
+// reroutedSince says whether the user changed the routing of the group
+// scope is (Group.RoutedAt) after the conversation was last answered: the
+// new routing counts at its next turn, as a reorder does (#6708).
+func reroutedSince(scope string, st stick) bool {
+	gid, ok := strings.CutPrefix(scope, provider.GroupPrefix)
+	return ok && st.at.Before(provider.GroupRoutedAt(gid))
+}
+
+func reorderedSince(st stick, cs []candidate) bool {
+	for _, c := range cs {
+		if c.who() == st.who {
+			return st.at.Before(provider.ReorderedAt(c.p.ID))
+		}
+	}
+	return false
 }

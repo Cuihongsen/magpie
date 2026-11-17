@@ -167,7 +167,7 @@ func OnNetwork() bool {
 
 // remoteKeyed: requests from another machine are answered, with an enabled
 // gateway key — while the gateway is shared, or listens on the network.
-func remoteKeyed() bool { return settings.Load().LAN || OnNetwork() }
+func remoteKeyed() bool { return settings.Shared().LAN || OnNetwork() }
 
 // PublicHost is PublicURL's host, "" when it isn't set.
 func PublicHost() string {
@@ -514,6 +514,8 @@ func (s *Server) Relisten() error {
 	if s.ln == nil {
 		return nil // not serving
 	}
+	// where it listens now is what a command in another shell is told
+	defer func() { recordListening(s.ln.Addr()) }()
 	to := listenAddr()
 	if s.ln.Addr().String() == to {
 		return nil
@@ -616,7 +618,16 @@ func lanGuard(next http.Handler) http.Handler {
 		}
 		// the key page itself is the same bytes for everyone, so it is
 		// opened before the key it asks for is typed; its data isn't
-		if remote && keyPageOpen(r) {
+		// magpie's CA, too: public, and fetched before the computer
+		// asking trusts magpie's https:// (https.go)
+		if remote && (keyPageOpen(r) || caFileOpen(r) || chatPageOpen(r)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// so is the join page, and its route carries a password, not a
+		// key: the handler judges the password, the browser that sent it
+		// and how often it is tried (join.go)
+		if remote && (joinPageOpen(r) || joinAsked(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -822,7 +833,10 @@ func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool
 	}
 	if ok {
 		r = r.WithContext(access.WithIdentity(r.Context(), who))
+		// the names the key gives models, before any route reads one
+		r = aliasRequest(r, who)
 	}
+	r = keepCodexListAuth(r, ok)
 	r.Header = r.Header.Clone()
 	r.Header.Set("Authorization", "Bearer "+Token)
 	for _, h := range []string{"x-api-key", "x-goog-api-key"} {

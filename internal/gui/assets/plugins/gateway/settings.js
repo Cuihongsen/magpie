@@ -10,7 +10,8 @@
 // port, 1024 up, is typed here; magpie moves its gateway there and every
 // agent it connected with it, or says why it can't (another program has
 // it). MAGPIE_ADDR, a whole host:port, comes first and the field shows it,
-// off (Chicring on Discord: the row was titled a port while it showed one).
+// off, the row titled an address then (Chicring on Discord: the row was
+// titled a port while it showed one).
 let portDraft = { value: null, err: "" };
 // portSays is the gateway's word on a port it couldn't take, in the page's
 // language: it says the port, so it is matched rather than looked up
@@ -25,14 +26,18 @@ function renderPort(s) {
   const box = $("#portList");
   const r = el("div", "row pref port-row");
   const who = el("div", "who");
-  who.append(el("div", "name", t("Gateway address")));
+  // a port is all that is typed here, so it is called one; MAGPIE_ADDR's
+  // whole host:port is an address (the owner, 11-12: the row titled an
+  // address over a field that takes 3425)
+  const title = t(s.addrEnv ? "Gateway address" : "Gateway port");
+  who.append(el("div", "name", title));
   const sub = el("div", "sub");
   const d = portDraft;
   const now = s.addrEnv ? "" : String(s.port || 3425);
   const field = input(d.value ?? now, "3425");
   field.className = "words gateway-port";
   field.inputMode = "numeric";
-  field.setAttribute("aria-label", t("Gateway address"));
+  field.setAttribute("aria-label", title);
   const save = el("button", "text", t("Apply"));
   if (s.addrEnv) {
     field.value = s.addrEnv;
@@ -77,11 +82,16 @@ function renderPort(s) {
 // renderBareIds: Model ids without the provider (settings.bareModelIDs,
 // love1sbug on X, moving from CLIProxyAPI): the gateway's /v1/models
 // lists each model by its own id as well, gpt-5.6-sol beside
-// codex/gpt-5.6-sol. Posted on its own; off by default.
+// codex/gpt-5.6-sol. Only lists it by that id alone, in place of the
+// provider/model ids it stands for (settings.bareModelIDsOnly, qQianye on
+// X: a Docker magpie's client listed every model twice, and a gateway has
+// no Agents page to pick models on). Posted on its own; off by default.
 function renderBareIds(s) {
   renderBusyLoad(s); // Models › Routing's row
-  $("#bareIdsSegs").replaceChildren(segs([[false, t("Off")], [true, t("On")]], !!s.bareModelIDs, (on) =>
-    writingPrefs(api("settings/bare-ids", { on })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
+  renderContextCap(s);
+  const now = !s.bareModelIDs ? "off" : s.bareModelIDsOnly ? "only" : "on";
+  $("#bareIdsSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")], ["only", t("Only")]], now, (v) =>
+    writingPrefs(api("settings/bare-ids", { on: v !== "off", only: v === "only" })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
       .catch((e) => { status(t(e.message), "err"); renderSettings(); })));
 }
 
@@ -129,6 +139,47 @@ function renderBusyLoad(s) {
     renderBusyLoad(s);
     $("#busyLoadRow .busy-load-at").focus(NO_SCROLL);
   }));
+}
+
+// renderContextCap: one longest context for every model (settings.ContextCap,
+// WJaunita45604 on X). A window a model or its provider has set itself wins;
+// empty or "off" takes the cap away.
+function renderContextCap(s) {
+  const field = input(s.contextCap ? contextsText({ "*": s.contextCap }) : "", t("None"));
+  field.className = "words context-cap";
+  field.style.cssText = "width:96px;flex:none";
+  field.setAttribute("aria-label", t("Longest context"));
+  const save = () => {
+    const v = field.value.trim().toLowerCase();
+    let at = 0;
+    if (v && v !== "off") {
+      const r = parseContexts(v);
+      if (r.error || !r.map["*"]) { status(t("Longest context: {v} is not a number of tokens like 272k", { v: field.value }), "err"); return renderContextCap(s); }
+      at = r.map["*"];
+    }
+    if (at === (s.contextCap || 0)) return renderContextCap(s);
+    writingPrefs(api("settings/context-cap", { at })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
+      .catch((e) => { status(t(e.message), "err"); renderSettings(); });
+  };
+  field.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") field.blur(); if (e.key === "Escape") { field.value = s.contextCap ? contextsText({ "*": s.contextCap }) : ""; field.blur(); } };
+  field.onchange = save;
+  // which windows it holds: only models with none of the user's own, or
+  // every model (the shorter of the two is told; settings.ContextCapAll)
+  const mode = el("button", "proto pick context-cap-mode");
+  mode.type = "button";
+  mode.setAttribute("aria-label", t("Longest context holds"));
+  mode.replaceChildren(el("span", "", t(s.contextCapAll ? "Every model" : "Models without their own")), svg(CHEV, 11, 1.6));
+  mode.onclick = (e) => {
+    e.stopPropagation();
+    if (mode.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(mode, [{ v: "own", name: t("Models without their own") }, { v: "all", name: t("Every model") }], s.contextCapAll ? "all" : "own",
+      (v) => { if ((v === "all") === !!s.contextCapAll) return; writingPrefs(api("settings/context-cap-mode", { all: v === "all" })).then((ns) => { prefs = state.settings = ns; renderSettings(); }).catch((er) => { status(t(er.message), "err"); renderSettings(); }); },
+      "Longest context holds", "context-cap-menu");
+  };
+  const box = el("div", "");
+  box.style.cssText = "display:flex;gap:8px;align-items:center;justify-content:flex-end";
+  box.append(mode, field);
+  $("#contextCapVal").replaceChildren(box);
 }
 
 // renderCORS: the web pages whose scripts may call the gateway from a
@@ -346,6 +397,109 @@ function renderMTLS(s) {
   }
 }
 
+// renderHTTPS: HTTPS for other computers (zhangly1 on X: Claude on another
+// computer on the LAN needed magpie at https://), under Share on local
+// network. On, other computers get the certificate imported here, or one
+// magpie's own CA signs; then the CA's row saves it to Downloads, and the
+// rows under it say how another computer fetches and trusts it. Asked of
+// its own route (https.go), as Browser access is; drawn while magpie
+// answers other computers or the switch is on.
+let httpsState = null;
+function httpsSays(m) {
+  if (/^this page is open from another computer/.test(m)) return t("This page is open from another computer: turn HTTPS on or off from the computer magpie runs on");
+  if (/^a certificate but no private key/.test(m)) return t("A certificate but no private key: choose the key’s file too");
+  if (/^a private key but no certificate/.test(m)) return t("A private key but no certificate: choose the certificate’s file too");
+  if (/^the private key belongs to none/.test(m)) return t("The private key belongs to none of the certificates");
+  if (/^the private key has a passphrase/.test(m)) return t("The private key has a passphrase: choose one without");
+  if (/^no PEM certificate or key/.test(m)) return t("No PEM certificate or key in the files chosen");
+  return t(m);
+}
+function renderHTTPS(s, asked) {
+  const box = $("#httpsList");
+  if (!box) return;
+  // asked while the rows can show, and again once the saved switch moves
+  // from what it said: every Settings draw asking cost a request a draw,
+  // and a page's write counts read it as a write (#6709)
+  if (!asked && s && (s.lan || s.onNetwork || s.https) && (!httpsState || !httpsState.on !== !s.https)) api("settings/https").then((h) => { httpsState = h; renderHTTPS(prefs, true); }).catch(() => {});
+  const h = httpsState;
+  if (!s || !h || (!s.lan && !s.onNetwork && !h.on)) return void box.replaceChildren();
+  const post = (what, body) => writingPrefs(api("settings/https" + what, body))
+    .then((nh) => {
+      httpsState = nh; renderHTTPS(prefs, true);
+      if (nh.saved) status(t("Saved to {path}", { path: nh.saved }), "ok", 4000);
+    })
+    .catch((e) => { status(httpsSays(e.message), "err"); renderHTTPS(prefs, true); });
+  const rows = [];
+  const row = (cls, name, sub, ...tools) => {
+    const r = el("div", "row pref " + cls);
+    const who = el("div", "who");
+    who.append(el("div", "name", name));
+    if (sub) who.append(sub instanceof Node ? sub : el("div", "sub", sub));
+    const val = el("div", "val");
+    val.append(...tools);
+    r.append(who, val);
+    rows.push(r);
+    return r;
+  };
+  row("https-row", "HTTPS",
+    h.served && !h.on ? t("Already served over https:// by Require a client certificate or --tls-cert") : t("Other computers call magpie at https://; this computer can still use http://"),
+    segs([["off", t("Off")], ["on", t("On")]], h.on ? "on" : "off", (v) => post("", { on: v === "on" })));
+  if (h.served) {
+    const c = h.cert;
+    const until = c && new Date(c.until).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" });
+    const from = !c ? "" : c.from === "files" ? "--tls-cert " + c.file : c.from === "imported" ? t("Your certificate") : t("Signed by magpie’s CA");
+    const sub = h.certError ? el("div", "sub err", t(h.certError))
+      : el("div", "sub", [from, (c.names || []).join(", "), t("Until {date}", { date: until })].filter(Boolean).join(" · "));
+    sub.title = sub.textContent;
+    const tools = [];
+    if (!h.files) {
+      const file = el("input");
+      file.type = "file";
+      file.multiple = true;
+      file.accept = ".pem,.crt,.cer,.key,application/x-pem-file,application/x-x509-ca-cert";
+      file.hidden = true;
+      file.onchange = async () => {
+        const files = await Promise.all([...file.files].map((f) => f.text()));
+        file.value = "";
+        if (files.length) post("/import", { files });
+      };
+      const pick = el("button", "text", t("Import…"));
+      pick.type = "button";
+      pick.onclick = () => file.click();
+      tools.push(file, pick);
+      if (c?.from === "imported") {
+        const x = el("button", "text", t("Remove"));
+        x.type = "button";
+        x.onclick = () => post("/remove", {});
+        tools.push(x);
+      }
+    }
+    row("https-cert", t("Certificate"), sub, ...tools);
+  }
+  if (h.ca) {
+    const save = el("button", "text", t("Save"));
+    save.type = "button";
+    save.onclick = () => post("/ca", {});
+    const sub = el("div", "sub wraps", t("Trust it once on each computer that calls magpie · SHA-256 {fp}", { fp: h.ca }));
+    row("https-ca", t("magpie’s CA"), sub, save);
+    // the address picked under Share on local network, else the first
+    const at = (h.caURLs || []).find((u) => u.startsWith(lanSelectedURL + "/")) || h.caURLs?.[0];
+    const steps = [
+      at && [t("Download"), "curl -kO " + at],
+      ["macOS", "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain magpie-ca.crt"],
+      ["Windows", "certutil -addstore -f Root magpie-ca.crt"],
+      ["Linux", "sudo cp magpie-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates"],
+      [t("Claude Code and other Node apps"), "NODE_EXTRA_CA_CERTS=/path/to/magpie-ca.crt"],
+    ];
+    for (const [name, cmd] of steps.filter(Boolean)) {
+      const code = el("code", "sub https-cmd", cmd);
+      code.title = cmd;
+      row("https-step", name, code, copyBtn(cmd, name, t("Copied")));
+    }
+  }
+  box.replaceChildren(...rows);
+}
+
 // renderLAN: the gateway shared on the local network, for agents on other
 // machines. Gateway keys and connection examples live together in Gateway.
 let lanSelectedURL = "", lanProtocol = "openai";
@@ -435,6 +589,46 @@ function sideLAN(g) {
   const pub = g.publicURL && !(g.lazyCatBox && g.publicURL === g.lazyCat) ? g.publicURL : "";
   return u[0] && (pub || (u.includes(lanWant) ? lanWant : u[0]));
 }
+// mcpFar: where other machines reach the gateway, from Settings' read, and
+// how it is named (addrWho); none while magpie isn't shared (xzhih on X:
+// Settings' MCP server addresses said 127.0.0.1 on a server)
+function mcpFar(s) {
+  const g = { ...s, url: s.gateway, container: s.lanContainer, containerHost: s.lanContainerHost, lazyCat: s.lanLazyCat, lazyCatBox: s.lanLazyCatBox };
+  const url = s.lan ? sideLAN(g) : web && s.publicURL;
+  return url && { url, who: addrWho(g, url, gwLAN(g).others) };
+}
+// mcpLan: whether Settings' MCP servers are shown at the far address: the
+// pick of mcpWhere, a page other machines opened starting there
+function mcpLan() {
+  try { return (localStorage.getItem("magpie.mcpWhere") || (web ? "lan" : "this")) === "lan"; } catch { return web; }
+}
+// mcpBase: the gateway's address for Settings' MCP servers; "" when there
+// is no far address, and mcpAddress goes on as before
+function mcpBase(s) {
+  const far = mcpFar(s);
+  return far && (mcpLan() ? far.url : s.gateway || providers?.gateway?.url || `http://127.0.0.1:${s.port || 3425}`);
+}
+// mcpWhere: the This computer / far address switch beside an MCP server's
+// address, none while there is only one; redo draws the page again
+function mcpWhere(s, redo) {
+  const far = mcpFar(s);
+  return far ? [segs([["this", t("This computer")], ["lan", far.who]], mcpLan() ? "lan" : "this", (v) => { keepPick("magpie.mcpWhere", v); redo(); })] : [];
+}
+// mcpRows: Image recognition's and Image generation's MCP servers, each with
+// its address (mcpWhere's pick); Settings › Models, under the image rows
+function mcpRows(s, box) {
+  // both as the gateway's MCP servers, for an agent with no Library (JonahFu on X)
+  const mcpRow = (id, path, name, sub) => {
+    const url = mcpAddress(s, path), r = el("div", "row pref"), who = el("div", "who"), val = el("div", "val");
+    who.append(el("div", "name", name), el("div", "sub", sub));
+    val.append(...mcpWhere(s, renderSettings), el("code", "", url), copyBtn(url, t("Address")));
+    r.append(who, val);
+    r.id = id;
+    box.append(r);
+  };
+  mcpRow("visionMcpRow", "/mcp/magpie/vision", t("Image recognition MCP server"), t("Agents can add image recognition as an MCP server (Streamable HTTP) with one analyze_image tool, which reads an image with the Image recognition model from a file path, a URL or a data URL. From another computer, send a gateway key as Authorization: Bearer <key> and the image as a URL or data URL."));
+  mcpRow("imageMcpRow", "/mcp/magpie/image", t("Image generation MCP server"), t("Agents can add image generation as an MCP server (Streamable HTTP) with generate_image, generate_video and generation_result tools, which draw with the Image generation model. An image comes back in the answer and at a URL kept for an hour, a video at a URL; nothing is saved in the agent's project. From another computer, send a gateway key as Authorization: Bearer <key>."));
+}
 // the line was drawn from boot.js before this script came
 if (sideGwAt) renderSideGw();
 function renderLAN(s) {
@@ -509,6 +703,58 @@ function renderLAN(s) {
     update();
   }
   if (sub) row(head || t("In a container"), sub, "").classList.add("lan-container");
+  renderJoin(s, box);
+}
+
+// renderJoin: Join with a password (EV_John_Liu on X), under the shared
+// address. With a password set, another computer opens <address>/join,
+// types it, and gets a gateway key of its own, named for it in Gateway
+// keys, and the setup for its agents. Only a hash is kept: the field is
+// always empty, and a password typed in it replaces the one set.
+let joinDraft = { value: "", err: "" };
+function renderJoin(s, box) {
+  const d = joinDraft;
+  const set = (password) => writingPrefs(api("settings/join", { password }))
+    .then((ns) => { prefs = ns; joinDraft = { value: "", err: "" }; renderSettings(); status(t("Saved"), "ok", 1500); })
+    .catch((e) => { d.err = t(e.message); status(d.err, "err"); renderSettings(); });
+  const r = el("div", "row pref rule-row join-row");
+  const who = el("div", "who");
+  who.append(el("div", "name", t("Join with a password")),
+    el("div", "sub" + (d.err ? " err" : ""), d.err || t("Other computers open the join link and type this password to get a gateway key of their own and the setup for their agents")));
+  const field = input(d.value, s.joinOn ? t("New password") : t("Password"));
+  field.type = "password";
+  field.className = "words rule-match join-pw";
+  field.setAttribute("aria-label", t("Password"));
+  field.autocomplete = "new-password";
+  field.spellcheck = false;
+  const go = el("button", "text", t("Set"));
+  go.type = "button";
+  go.onclick = () => {
+    d.value = field.value;
+    if (!d.value) return field.focus();
+    set(d.value);
+  };
+  field.oninput = () => { d.value = field.value; };
+  field.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") go.onclick(); };
+  const val = el("div", "val rule-add");
+  val.append(field, go);
+  if (s.joinOn) {
+    const off = el("button", "text join-off", t("Turn off joining"));
+    off.type = "button";
+    off.onclick = () => set("");
+    val.append(off);
+  }
+  r.append(who, val);
+  box.append(r);
+  if (!s.joinOn || !lanSelectedURL) return;
+  const link = lanSelectedURL + "/join";
+  const lr = el("div", "row pref join-link-row");
+  const lw = el("div", "who");
+  lw.append(el("div", "name", t("Join link")));
+  const lv = el("div", "val");
+  lv.append(el("code", "", link), copyBtn(link, t("Join link")));
+  lr.append(lw, lv);
+  box.append(lr);
 }
 
 // renderWebPage: Browser access, the app's own page served to a browser

@@ -20,6 +20,10 @@ on:
 
 jobs:
   trigger-release:
+    # The handoff below is yetone/magpie-releases', with the upstream
+    # owner's token: a fork has neither, and its own tags are packaged by
+    # Fork package (.github/workflows/fork-package.yml).
+    if: github.repository == 'yetone/magpie'
     runs-on: ubuntu-latest
     # room for the dispatch to wait out the owner's API rate limit (65 min)
     timeout-minutes: 75
@@ -126,7 +130,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REF: ${{ needs.trigger-release.outputs.ref }}
-      ASSETS: 16 # what every release carries; a smaller count is still uploading
+      ASSETS: 17 # what every release carries; a smaller count is still uploading
     steps:
       - name: Wait for magpie-releases to publish every asset
         run: |

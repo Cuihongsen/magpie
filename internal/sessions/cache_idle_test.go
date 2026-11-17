@@ -42,6 +42,10 @@ func TestIdleParsesLetGoAndComeBackFromDisk(t *testing.T) {
 		rolloutsSeen.Range(func(any, any) bool { rollouts++; return true })
 		return
 	}
+	ccDirs := func() (n int) { ccListed.Range(func(any, any) bool { n++; return true }); return }
+	if ccDirs() == 0 {
+		t.Fatal("before: no Claude Code folder's listing kept; the test lists none")
+	}
 	// folders are listed so only on macOS (dirent.Stats)
 	if i, r := memos(); i == 0 || r == 0 && runtime.GOOS == "darwin" {
 		t.Fatalf("before: %d Codex identity lists and %d folders' rollouts kept; the test reads none", i, r)
@@ -52,8 +56,8 @@ func TestIdleParsesLetGoAndComeBackFromDisk(t *testing.T) {
 	if !dropIdleCache() || loaded || len(cache) != 0 || cacheDrops.Load() != drops+1 {
 		t.Fatalf("idle parses kept: loaded %v, %d in memory", loaded, len(cache))
 	}
-	if i, r := memos(); i != 0 || r != 0 {
-		t.Fatalf("idle: %d Codex identity lists and %d folders' rollouts kept", i, r)
+	if i, r := memos(); i != 0 || r != 0 || ccDirs() != 0 {
+		t.Fatalf("idle: %d Codex identity lists, %d folders' rollouts and %d Claude Code listings kept", i, r, ccDirs())
 	}
 
 	var parses atomic.Int32
@@ -70,5 +74,41 @@ func TestIdleParsesLetGoAndComeBackFromDisk(t *testing.T) {
 		if after[i].ID != before[i].ID || after[i].Tokens != before[i].Tokens || after[i].Title != before[i].Title {
 			t.Fatalf("session %d after the let-go = %+v, before %+v", i, after[i], before[i])
 		}
+	}
+}
+
+// A page gone from view lets the parses go at once (ForgetParses), read
+// just now or not, and the next read has them back from sessions.json; a
+// save not on disk yet still keeps them.
+func TestForgetParsesLetsGoAtOnce(t *testing.T) {
+	setup(t)
+	before := List(0)
+	if len(before) == 0 {
+		t.Fatal("no sessions listed")
+	}
+	saved()
+	cacheKept.last.Store(time.Now().UnixNano())
+
+	saving.Lock()
+	saving.failed = true
+	saving.Unlock()
+	if ForgetParses() || !loaded {
+		t.Fatal("the parses were let go while the last save had failed")
+	}
+	saving.Lock()
+	saving.failed = false
+	saving.Unlock()
+
+	if !ForgetParses() || loaded || len(cache) != 0 {
+		t.Fatalf("parses read just now kept: loaded %v, %d in memory", loaded, len(cache))
+	}
+	if ForgetParses() {
+		t.Fatal("ForgetParses said it let go with nothing loaded")
+	}
+	var parses atomic.Int32
+	parseHook = func() { parses.Add(1) }
+	t.Cleanup(func() { parseHook = nil })
+	if after := List(0); len(after) != len(before) || parses.Load() != 0 {
+		t.Fatalf("%d sessions after (%d before), %d files read again", len(after), len(before), parses.Load())
 	}
 }

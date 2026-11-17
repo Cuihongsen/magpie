@@ -627,8 +627,9 @@ func namedModelEffort(in map[string][]sessions.ModelEffort, alias func(string) s
 
 func keptCodexModelEffort(p Period) map[string][]sessions.ModelEffort {
 	if LogCalls != nil { // synthetic logs carry no state to key on
-		return codexModelEffort(codexEffortRows(p, Clock(), LogCalls))
+		return codexModelEffort(codexEffortRows(p, localNow(), LogCalls))
 	}
+	derivedUsed() // the kept answers go with the chunks' caches when idle
 	codexEffort.Lock()
 	if e := codexEffort.periods[p]; e != nil && e.have && e.root == requestRoot() && time.Since(e.at) < effortFresh {
 		codexEffort.built++
@@ -638,7 +639,7 @@ func keptCodexModelEffort(p Period) map[string][]sessions.ModelEffort {
 		return value // read before the state is: that is most of an unchanged ask's cost
 	}
 	codexEffort.Unlock()
-	now := Clock()
+	now := localNow()
 	st := readRequestState(now)
 	codexEffort.Lock()
 	e := codexEffort.periods[p]
