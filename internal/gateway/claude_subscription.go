@@ -334,6 +334,13 @@ type subscriptionRun struct {
 	// compares it, for a client that took its images out since (#1382).
 	told     string
 	toldRuns []heardRun
+	// opening is the first message of that conversation (historyKey):
+	// a client that compacted it begins it with its summary instead
+	// (opensWith). resent says a request sent the turn the run answers
+	// again while the run had it (supersede): it waits parkLongest at most
+	// on its calls, until results of its own come (continueWith).
+	opening string
+	resent  bool
 
 	// A run whose output may not carry a call before it is made (Claude
 	// Code's interactive mode, readOutput) learns of it here, as the MCP
@@ -1058,9 +1065,6 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		// tokens a check on the subscription (0xAncientTwo)
 		args = append(args, "--thinking", "disabled")
 	}
-	if len(req.Format.schema()) > 0 {
-		args = append(args, "--json-schema", string(cliSchema(req.Format.schema())))
-	}
 	// in the caller's own folder when it says which it is and it is one
 	// here (clientWorkDir): Claude Code tells the model the folder it runs
 	// in as its working directory, and a model told magpie's folder wrote
@@ -1260,6 +1264,28 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		turn = release
 	}
 	defer turn()
+	// a schema is the request's, of any size: -p is given one that fits
+	// a command line there (startValueMax), and a larger one with its
+	// initialize (initSchema), as the Agent SDK hands it over; Linux
+	// refuses to start a program with an argument over 128KiB, "argument
+	// list too long" (#6848). The interactive mode is given none: its
+	// answer tool has the schema, in the run's tools file
+	var initSchema json.RawMessage
+	if schema := cliSchema(req.Format.schema()); len(schema) > 0 && !tui {
+		if len(schema) <= startValueMax {
+			args = append(args, "--json-schema", string(schema))
+		} else {
+			// an initialize's schema Claude Code can't use is passed
+			// over, structured output off with no word of it (a real
+			// 2.1.316), where the flag's exits; it is checked here, a
+			// 400 as the flag's is (#3036)
+			if _, err := compileAnswerSchema(schema); err != nil {
+				cleanup()
+				return nil, nil, &cliSchemaRefused{"Claude Code can't use the request's JSON schema: " + err.Error()}
+			}
+			initSchema = schema
+		}
+	}
 	noteClaudeRun(code)
 	noteEntry(ctx, tui, code)
 	var cmd *exec.Cmd
@@ -1297,7 +1323,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	guard := ""
 	if tui {
 		if len(req.Safeguards) > 0 {
-			env = append(env, "CLAUDE_CODE_EXTRA_BODY="+claudeExtraBody(req.Safeguards, ""))
+			env = append(env, "CLAUDE_CODE_EXTRA_BODY="+claudeExtraBody(startSafeguards(req.Safeguards), ""))
 		}
 		guard = filepath.Join(tmp, "guard.json")
 		if writeGuard(guard, guardBody(req.Safeguards, "")) == nil {
@@ -1376,6 +1402,9 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	run.outputs = []*os.File{stdout, stderr}
 	run.reading.Add(2)
 	run.room = room
+	if req.runTold != nil {
+		req.runTold(run)
+	}
 	err = run.launch()
 	launched = err == nil
 	_, _ = stdoutW.Close(), stderrW.Close() // Claude Code has its own
@@ -1394,7 +1423,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.readOutput(stdout)
 	}()
 
-	if len(req.Safeguards) > 0 || from != nil || run.clientMarks || tui {
+	if len(req.Safeguards) > 0 || from != nil || run.clientMarks || tui || initSchema != nil {
 		// Initialize the SDK before applying settings. Send the potentially
 		// large context over stdin rather than an environment entry. A
 		// Claude Code resumed from a saved session answers it only once
@@ -1410,7 +1439,11 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		if tui {
 			wait = tuiInitWait
 		}
-		if err := run.cliControlWithin(ctx, map[string]any{"subtype": "initialize"}, wait); err != nil {
+		hello := map[string]any{"subtype": "initialize"}
+		if initSchema != nil {
+			hello["jsonSchema"] = initSchema
+		}
+		if err := run.cliControlWithin(ctx, hello, wait); err != nil {
 			run.abort()
 			if tui && client && configDir == "" && run.saidOnEnd(claudetui.Untrusted) {
 				kept = true
@@ -1655,6 +1688,29 @@ func claudeExtraBody(raw json.RawMessage, tail string) string {
 	}
 	b, _ := json.Marshal(body)
 	return string(b)
+}
+
+// startValueMax bounds a value of a request's on a run's command line
+// or in its environment (claudetui.StartValueMax, #6848).
+const startValueMax = claudetui.StartValueMax
+
+// startSafeguards are the safeguards an interactive run is started with
+// in CLAUDE_CODE_EXTRA_BODY: all of them when they fit startValueMax.
+// Larger ones are in the run's guard file whole, which its tap puts in
+// each request in place of these; without the parts Claude Code itself
+// sheds over its own budget (safeguardsKept) when that fits, so a
+// Claude Code that didn't load the tap still says what the user
+// allows, else an empty list, which Claude Code still sends (a real
+// 2.1.316), marking the requests the tap puts them in. A Claude Code
+// the helper gives no tap sends the stand-in.
+func startSafeguards(raw json.RawMessage) json.RawMessage {
+	if len(claudeExtraBody(raw, "")) <= startValueMax {
+		return raw
+	}
+	if kept := safeguardsKept(raw); len(claudeExtraBody(kept, "")) <= startValueMax {
+		return kept
+	}
+	return json.RawMessage("[]")
 }
 
 // safeguardVaries is what Claude Code's classifier context carries that
@@ -2378,6 +2434,81 @@ func (b *subscriptionBridge) retire(owner string, req *Request) {
 	}
 	for _, run := range drop {
 		run.abortFor("its conversation was told to a new one")
+	}
+}
+
+// supersede ends, or bounds, the runs waiting on tool calls whose
+// conversation req carries on in run, the one started or resumed for it
+// (Kling__Lab on X). A run left waiting on calls no client will answer
+// holds a Claude Code that, in the interactive mode, moves a call to the
+// background after 120s and goes on working for no one, writing its
+// session, until runTimeout ends it: 30 to 80 minutes, in which the next
+// run's model read its session as another one at the same work.
+//
+//   - Its client compacted the conversation: req names calls the run made
+//     (its pending calls, the ones last answered in it, or those its
+//     session has lines for) but begins with another message than the
+//     conversation the run heard (opensWith), the client's summary. Its
+//     results, if they come, are in this conversation, and the run is
+//     ended now. A fork or a resumed session of Claude Code (#2933)
+//     begins with its lead's own first message, and the run is left to
+//     its parkLongest (released).
+//   - The very turn the run answers is sent again (a sub-agent's Task a
+//     client sent twice): the client may have given up on the first
+//     answer, or asked two sub-agents the same thing. The run is not
+//     ended, but waits parkLongest at most on its calls (resent), as one
+//     whose caller stopped does, and goes on as before if its results
+//     come.
+func (b *subscriptionBridge) supersede(req *Request, run *subscriptionRun) {
+	owner := run.owned()
+	named := map[string]bool{}
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
+			switch {
+			case p.Kind == ToolCall && p.ID != "":
+				named[p.ID] = true
+			case p.Kind == ToolResult && p.CallID != "":
+				named[p.CallID] = true
+			}
+		}
+	}
+	want := historyKey(req.Messages)
+	b.mu.Lock()
+	var runs []*subscriptionRun
+	for _, r := range b.runs {
+		// one kept for its conversation's next turn waits on no call
+		if r != run && r.idleKey == "" && r.owned() == owner {
+			runs = append(runs, r)
+		}
+	}
+	b.mu.Unlock()
+	for _, r := range runs {
+		r.mu.Lock()
+		waiting := !r.closed && !r.resuming && r.segment == nil && len(r.pending) > 0
+		mine := false
+		for id := range r.pending {
+			mine = mine || named[id]
+		}
+		for _, id := range r.results {
+			mine = mine || named[id]
+		}
+		for id := range r.lines {
+			mine = mine || named[id]
+		}
+		again := !r.closed && r.told != "" && r.told == want
+		if again {
+			r.resent = true
+		}
+		long := r.timer != nil && time.Until(r.ends) > parkLongest
+		r.mu.Unlock()
+		switch {
+		case waiting && mine && !r.opensWith(req.Messages):
+			log.Printf("claude: Claude Code pid %d (%s) is let go while it waits on tool calls: its client compacted the conversation, which goes on in a new run", r.pid(), r.model)
+			r.abortFor("its client compacted the conversation, which went on in a new run")
+		case again && waiting && long:
+			log.Printf("claude: Claude Code pid %d (%s) waits %s more at most on its tool calls: its turn was sent again, and goes on in another run", r.pid(), r.model, parkLongest)
+			r.endIn(parkLongest)
+		}
 	}
 }
 
@@ -3596,6 +3727,7 @@ func (r *subscriptionRun) park() {
 		}
 	}
 	r.parkedSeq = r.lineSeq
+	resent := r.resent
 	r.mu.Unlock()
 	switch {
 	case r.timer == nil:
@@ -3606,6 +3738,9 @@ func (r *subscriptionRun) park() {
 	case r.stdin == nil:
 		r.endIn(parkLongest)
 		return
+	case resent:
+		// its turn was sent again: its client may have given up on it
+		r.endIn(parkLongest)
 	}
 	if why, over := r.oversized(3); over {
 		log.Printf("claude: Claude Code pid %d (%s) is let go while it waits on tool calls: %s; their results go to a new one told the whole conversation", r.pid(), r.model, why)
@@ -3687,9 +3822,22 @@ func historyKey(msgs []Message) string {
 // heard keeps the conversation of the request the run now answers.
 func (r *subscriptionRun) heard(msgs []Message) {
 	key, runs := historyKey(msgs), heardRuns(msgs, true)
+	opening := ""
+	if len(msgs) > 0 {
+		opening = historyKey(msgs[:1])
+	}
 	r.mu.Lock()
-	r.told, r.toldRuns = key, runs
+	r.told, r.toldRuns, r.opening = key, runs, opening
 	r.mu.Unlock()
+}
+
+// opensWith says msgs begin with the message the conversation the run
+// last heard began with, or that the run heard none.
+func (r *subscriptionRun) opensWith(msgs []Message) bool {
+	r.mu.Lock()
+	opening := r.opening
+	r.mu.Unlock()
+	return opening == "" || len(msgs) > 0 && historyKey(msgs[:1]) == opening
 }
 
 // follows says msgs go on from the conversation the run last heard: that
@@ -6253,6 +6401,7 @@ func (r *subscriptionRun) continueWith(results []Part, said string, tools []brid
 	for _, p := range results {
 		r.results = append(r.results, p.CallID)
 	}
+	r.resent = false // its own client's results came: it is no one's leftover
 	r.mu.Unlock()
 	if r.resume != nil {
 		r.resume()
@@ -7413,14 +7562,15 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 		}
 	}
 	if run == nil {
-		run, events, err = start(r.Context(), req)
-		if err == nil {
-			// its agent is running already: what it was told is set
-			// under the run's lock, as offers and shelve read it
-			tools := map[string]bool{}
-			for _, t := range req.Tools {
-				tools[t.Name] = true
-			}
+		// what its agent is told is set before the agent starts: the
+		// output reader names a call by it, and Claude Code's first
+		// tool_use could be read before start returned (a deferred tool
+		// handed over cut, on a loaded CI box)
+		tools := map[string]bool{}
+		for _, t := range req.Tools {
+			tools[t.Name] = true
+		}
+		req.runTold = func(run *subscriptionRun) {
 			run.mu.Lock()
 			run.tools = tools
 			if search.Name != "" {
@@ -7430,7 +7580,15 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 				run.answerName, run.answerSchema = answer.Name, answerSchema
 			}
 			run.mu.Unlock()
+		}
+		run, events, err = start(r.Context(), req)
+		if err == nil {
+			// a run resumed is told this request's too
+			req.runTold(run)
 			run.adviseOn(r.Context(), req, s.adviceRound)
+			if name == "Claude Code" {
+				s.subscription.supersede(req, run)
+			}
 		}
 	}
 	if err != nil {

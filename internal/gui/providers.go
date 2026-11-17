@@ -424,6 +424,9 @@ type providerJSON struct {
 	// read said went wrong or was left as the user's (KoiLx0 on X)
 	LibraryShared bool   `json:"libraryShared,omitempty"`
 	LibraryNote   string `json:"libraryNote,omitempty"`
+	// ConnectAgents: a Remote magpie whose connected agents are
+	// connected here too, those installed here (agent.ConnectsAgents)
+	ConnectAgents bool `json:"connectAgents,omitempty"`
 	// RemoteUpdate: a Remote magpie's word on its last ask to follow
 	// this magpie's version (remoteUpdateNote)
 	RemoteUpdate *remoteUpdateJSON `json:"remoteUpdate,omitempty"`
@@ -455,6 +458,9 @@ type providerJSON struct {
 	// how many requests each key or account sends the vendor in any
 	// minute, 0 for no limit (coeo91 on Discord)
 	MaxRPM int `json:"maxRPM,omitempty"`
+	// MaxImages is how many images one request to it may carry, by the
+	// user's word: by model id, "*" for all (provider.Provider.MaxImages)
+	MaxImages map[string]int `json:"maxImages,omitempty"`
 	// RateWindows are the time-of-day windows it bills at its own rate
 	// (#2463), as the editor opens on them
 	RateWindows []provider.RateWindow `json:"rateWindows,omitempty"`
@@ -986,7 +992,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Fallback:             p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, NoStandIn: p.NoStandIn, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, ThisDevice: p.ThisDevice, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate, KeyPriceRates: p.KeyPriceRates,
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
-		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
+		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, MaxImages: p.MaxImages,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
 	}
 	if out.CrazyRetryCount == 0 {
@@ -1530,6 +1536,7 @@ func providersState() providersJSON {
 	desktop := desktopNumbers(uses)
 	have := map[string]bool{}
 	var remoteMCP map[string]bool // read once, at the first Remote magpie
+	var connects map[string]bool  // the same
 	all := provider.All()
 	// both lists made once at their size: each grown by append was 6 MB of
 	// what forty polls of the Providers page allocated with real accounts
@@ -1547,6 +1554,10 @@ func providersState() providersJSON {
 			info.LibraryMCP = remoteMCP[p.ID]
 			info.LibraryShared = library.BorrowedOn()[p.ID]
 			info.LibraryNote = library.BorrowNote(p.ID)
+			if connects == nil {
+				connects = agent.ConnectsAgents()
+			}
+			info.ConnectAgents = connects[p.ID]
 			info.RemoteUpdate = remoteUpdateNote(p.ID, time.Now())
 		}
 		s.Providers = append(s.Providers, info)
@@ -1990,6 +2001,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// LibraryShared, on a Remote magpie, is the switch for its
 			// Library's skills and prompts (library.SetBorrow)
 			LibraryShared *bool `json:"libraryShared"`
+			// ConnectAgents, on a Remote magpie, is the switch that
+			// connects here the agents it has connected
+			// (agent.SetConnectAgents)
+			ConnectAgents *bool `json:"connectAgents"`
 			// CopyOf, with New, is the provider the new one is a copy of
 			// (#268): its key and what else the form doesn't carry are
 			// taken from it when left out
@@ -2244,6 +2259,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// its key when the form left it blank
 			if pr, err := provider.FromPreset(in.Preset); err == nil && in.Chat == "" && in.Responses == "" && in.Anthropic == "" && in.Gemini == "" {
 				pr.Key, pr.Models, pr.Fallback, pr.Headers, pr.BalanceToken, pr.Contexts = in.Key, in.Models, in.Fallback, in.Headers, in.BalanceToken, in.Contexts
+				pr.MaxImages = in.MaxImages
 				pr.ZhipuTeam = in.ZhipuTeam
 				pr.NoModels = in.NoModels
 				pr.BestInFamily = in.BestInFamily
@@ -2704,6 +2720,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					if in.Contexts == nil {
 						in.Contexts = old.Contexts // a save that doesn't say
 					}
+					if in.MaxImages == nil {
+						in.MaxImages = old.MaxImages // likewise
+					}
 					if in.Key == old.Key {
 						in.KeyName, in.KeyProtocol, in.KeyWeight, in.KeyPlan = old.KeyName, old.KeyProtocol, old.KeyWeight, old.KeyPlan
 					}
@@ -2771,6 +2790,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 						return
 					}
 					askHub = *req.LibraryMCP
+				}
+			}
+			if req.ConnectAgents != nil {
+				if p, err := provider.Find(in.ID); err == nil && p.IsRemoteMagpie() && agent.ConnectsAgents()[in.ID] != *req.ConnectAgents {
+					agent.SetConnectAgents(in.ID, *req.ConnectAgents)
+					if *req.ConnectAgents {
+						go agent.FollowRemotePicks(context.Background())
+					}
 				}
 			}
 			if req.LibraryShared != nil {

@@ -4000,6 +4000,7 @@ function routingPage(part) {
       case "stand-in": return t("{agent} asked for {model}, which magpie doesn't serve; magpie served it on {to}, the model its config names.", v);
       case "codex-turn": return t("{agent} asked for {model} for a call of its own, which magpie doesn't serve; magpie served it on {to}, the model its last turn was answered on.", v);
       case "codex-follow": return t("{agent} asked for {model}, one of its own default models, for its memories, and its config names no model for them; magpie served it on {to}, the model of its conversation.", v);
+      case "codex-suggestions": return t("{agent} asked for {model} to suggest prompts for its home page; magpie served it on {to}, the model set for Codex’s prompt suggestions.", v);
       case "dsh-compact": return t("{agent} asked for {model} to compact its conversation; magpie served it on {to}, the model set for its compaction.", v);
       case "dsh-compact-rested": return t("{agent} asked for {model} to compact its conversation, and its provider is out of its limit; magpie served it on {to}, the same model from another provider.", v);
       case "privacy": return t("Masking would have changed this request, so magpie sent it as written to {to}, the model set for that in Settings › Privacy.", v);
@@ -4021,7 +4022,7 @@ function routingPage(part) {
     if (purposeOf(tagKind(r)) === "kind:collab_spawn") return r.group
       ? t("{agent} requested a subagent; magpie selects its model within this routing group.", { agent })
       : t("{agent} requested a subagent on {model}.", { agent, model: r.model });
-    if (purposeOf(r.kind) === "kind:ambient_suggestions") return t("{agent} drafted the suggested prompts on its home page by itself, in the background, searching the project's files and connected apps, and checked them for safety. Not a turn of the conversation; Codex's Settings › Configuration › Suggested prompts turns it off.", { agent });
+    if (purposeOf(r.kind) === "kind:ambient_suggestions") return t("{agent} drafted the suggested prompts on its home page by itself, in the background, searching the project's files and connected apps, and checked them for safety. Not a turn of the conversation; Codex prompt suggestions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › Configuration › Homepage suggestions turns it off.", { agent });
     if (purposeOf(r.kind) === "kind:composer_predictions") return t("{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.", { agent });
     // Claude Desktop's check that magpie answers names its model itself
     // (cybercaius on Discord: "Desktop requested deepseek-flash" while
@@ -6619,12 +6620,23 @@ function routingPage(part) {
   // id, both in any case (provider.compilePattern). The group keeps them,
   // and the models they match now follow those it names, in the catalog's
   // order (Group.Matched)
-  const isPattern = (s) => s.startsWith("re:") || s.includes("*");
+  // A free: rule (provider.FreePrefix, #5903) keeps, of the models the
+  // rest of it matches, those the last catalog marks free (m.free): never
+  // a $0 price (m.zero), a rate or an id that says free
+  const isPattern = (s) => s.startsWith("re:") || s.startsWith("free:") || s.includes("*");
   function patternRe(p) {
     try {
       if (p.startsWith("re:")) return goRe(p.slice(3));
       return new RegExp("^" + p.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
     } catch { return null; }
+  }
+  // patternTest is the models a pattern takes, as provider.compileRule
+  // reads it; null when it is one magpie can't read
+  function patternTest(p) {
+    const free = p.startsWith("free:"), scope = free ? p.slice(5).trim() : p;
+    if (free && (!scope || scope.startsWith("free:"))) return null;
+    const r = patternRe(scope);
+    return r && ((m) => (!free || m.free === true) && r.test(m.id));
   }
   // goRe is a re: pattern's regexp as Go reads it, in any case: Go's
   // leading flag group, "(?-i)" to make case matter, is JS's flags (U,
@@ -6645,11 +6657,11 @@ function routingPage(part) {
   // the models served now the patterns match, but those the group names
   // (at any reasoning): as provider.matchesIn finds them
   function matchedBy(patterns, named) {
-    const res = patterns.map(patternRe).filter(Boolean);
+    const res = patterns.map(patternTest).filter(Boolean);
     const own = new Set(named.map((id) => splitMember(id)[0]));
-    return (groups?.models || []).filter((m) => !own.has(m.id) && res.some((r) => r.test(m.id))).map((m) => m.id);
+    return (groups?.models || []).filter((m) => !own.has(m.id) && res.some((r) => r(m))).map((m) => m.id);
   }
-  const patternCount = (p) => { const r = patternRe(p); return r ? (groups?.models || []).filter((m) => r.test(m.id)).length : 0; };
+  const patternCount = (p) => { const r = patternTest(p); return r ? (groups?.models || []).filter(r).length : 0; };
   const patternWords = (n) => n ? t(n === 1 ? "1 model" : "{n} models", { n }) : t("matches nothing now");
   // what a group keeps of its members: those it names, not those its
   // patterns matched when it was read — they are found again each time
@@ -8296,7 +8308,7 @@ function routingPage(part) {
       const p = pin.value.trim();
       if (!p) return "";
       if (!isPattern(p)) return status(t("A pattern has a * in it, or starts with re:"), "warn"), null;
-      if (!patternRe(p)) return status(t("{pattern} is not a regular expression magpie can read", { pattern: p }), "warn"), null;
+      if (!patternTest(p)) return status(t("{pattern} is not a regular expression magpie can read", { pattern: p }), "warn"), null;
       if (!d.match.includes(p)) d.match.push(p);
       pin.value = "";
       rematch(); drawPats(); draw(); drawRules();
@@ -8309,7 +8321,8 @@ function routingPage(part) {
     pbox.append(plist, padd);
     drawPats();
     const pw = el("div");
-    pw.append(pbox, el("div", "hint", t("Every model a pattern matches is in the group, now and as providers list new ones, after the models above: * is any run of characters in provider/model, re: starts a regular expression.")));
+    pw.append(pbox, el("div", "hint", t("Every model a pattern matches is in the group, now and as providers list new ones, after the models above: * is any run of characters in provider/model, re: starts a regular expression.")),
+      el("div", "hint", t("free: before a pattern keeps the models the last catalog marked free, as in free:workbuddy/*. It is the catalog's flag, not a promise of no charge.")));
     // what few change — patterns, the lists, routing, the waits, the
     // window, how long a conversation stays, reasoning — folded under
     // Advanced below the rules, as a provider's editor folds its own (the
