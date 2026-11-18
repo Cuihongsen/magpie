@@ -93,6 +93,9 @@ type modelJSON struct {
 	// provider (#2578): only for a model Claude Desktop, installed here,
 	// is shown and names after its own catalog, "" for every other.
 	Desktop string `json:"desktop,omitempty"`
+	// Disabled is the pattern of Settings' disabled models (#1867) that
+	// turns it off, "" for a model that isn't
+	Disabled string `json:"disabled,omitempty"`
 	// what it costs, USD per million tokens (#819): the price the user set
 	// for it, and its list price, its vendor's else its maker's, before the
 	// provider's price rate
@@ -1206,6 +1209,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 	// the provider's catalogs worked out once, and each model priced once
 	// for its list price and whether it is free
 	pricer := p.Pricer()
+	disabled := provider.DisabledPattern()
 	// each model's provider/model ref, made once: the settings' maps and
 	// every agent's hidden list are looked up by it
 	var refs []string
@@ -1283,7 +1287,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		// a value the page reads as its default isn't sent: the window and
 		// reply limit the vendor listed are the ones in use unless the user
 		// set their own, and most models merge by their own id
-		if j.Merge = provider.MergeName(m.ID); j.Merge == m.ID {
+		if j.Merge = provider.MergeName(p, m.ID); j.Merge == m.ID {
 			j.Merge = ""
 		}
 		if j.Listed == j.Context {
@@ -1293,6 +1297,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			j.ListedOutput = 0
 		}
 		j.Desktop = desktop[ref]
+		j.Disabled = disabled(p.ID, m.ID)
 		if mp, ok := held.ModelPrices[ref]; ok {
 			if pr, bad := mp.Price(); bad == "" {
 				j.Price = &pr

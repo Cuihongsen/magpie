@@ -2117,6 +2117,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Anthropic, 400, err.Error())
 		return
 	}
+	// counted as it will be sent: its tool exchange mended where it
+	// doesn't pair (tool_blocks_paired.go)
+	body = toolBlocksPaired(body)
 	named := unprefixed(model)
 	if m := claudeTierStandIn(r, agentOf(r), model); m != "" {
 		model = m // counted on the model the request will go to
@@ -2825,7 +2828,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		askedEffort = subagentEffort
 	}
 	// any Claude Code subagent's turn, moved or not, for the Routing page's tag
-	subagentID := subagentTurnOf(r, call.Kind, body, desktopPick != nil || subagentEffort != "")
+	subagentID := subagentTurnOf(r, agent, call.Kind, body, desktopPick != nil || subagentEffort != "")
 	if _, held := keyHolds(r); !held {
 		// auto groups off: a bare name several vendors serve, none the
 		// agent's own, goes to none of them (freefcw on X)
@@ -3755,6 +3758,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}()
 	nearBehind := map[string]bool{} // accounts near their cap moved behind the rest once
 	var nearInKey time.Duration     // the key's slot waited for before an account's turn near its cap
+	// onWay takes back a turn counted out on its account from its
+	// near-cap check (lanes.plan) once its lane counts it, or it leaves
+	var onWay func()
+	defer func() {
+		if onWay != nil {
+			onWay()
+		}
+	}()
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
 		if c.p.ErrorCooldownSeconds > 0 {
@@ -3846,7 +3857,38 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			failTo(w, kept, from, call.Status, cmp.Or(msg, call.Error))
 			break
 		}
-		if used, ahead, near := s.nearCapOf(c, time.Now()); near && aff.Why != "strict" && (len(cands) > 1 || userCapped(c)) && capHeld(c.p, c.p, c.model, time.Now()) == nil {
+		if onWay != nil {
+			onWay()
+			onWay = nil
+		}
+		var nearUsed, nearAhead float64
+		var near bool
+		if _, _, watched := capWatched(c); watched {
+			// a turn found not near its cap is out on the account from
+			// its check, not from its lane, and the check and that count
+			// are one step: turns of sessions sent together each checked
+			// before any took its lane, saw none of the others, and went
+			// past the cap together (#6958: 93% of a 90% cap). The key's
+			// slot is taken first, as the near path below takes it, so a
+			// turn counted out never waits for a key slot a turn near the
+			// cap holds while it waits for the count to drop
+			waited, err := keySlot(r.Context())
+			nearInKey += waited
+			if err != nil {
+				call.Status, call.Error = canceled(r.Context())
+				break
+			}
+			s.nearCap.check.Lock()
+			nearUsed, nearAhead, near = s.nearCapOf(c, time.Now())
+			if !near {
+				onWay = s.lanes.plan(c.who())
+			}
+			s.nearCap.check.Unlock()
+			if nearChecked != nil {
+				nearChecked(near)
+			}
+		}
+		if near && aff.Why != "strict" && (len(cands) > 1 || userCapped(c)) && capHeld(c.p, c.p, c.model, time.Now()) == nil {
 			// within nearCapPoints of its usage cap, the account takes one
 			// turn at a time (dyzdyz010 on Discord): busy, the turn goes to
 			// the next one first, this one kept behind them, else waits for
@@ -3917,7 +3959,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				held = true
 			}
 			_, ended, _ := s.lanes.out(c.who())
-			nearCapAgain(r.Context(), c, used, ahead, held, ended)
+			nearCapAgain(r.Context(), c, nearUsed, nearAhead, held, ended)
 			nearDone = done
 			if h := capHeld(c.p, c.p, c.model, time.Now()); h != nil {
 				nearDone()
@@ -4406,7 +4448,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// at once instead of waiting in the queue (FallbackHeader)
 				ctx = withFallback(ctx)
 			}
-			hw.stop = stop
+			hw.stop, hw.name = stop, c.p.Name
 			if magpieAsks(r) {
 				// another magpie asked: its log is told the tier this
 				// one sent (stampTier)
@@ -4481,6 +4523,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					mate, handed.who, handed.release = m, m.who(), rel
 					return true, time.Time{}
 				})
+			}
+			if err == nil {
+				// the reply's reading has the turns come back by now
+				// (turnSpends), and its lane counts it
+				s.lanes.began(c.who())
+				if onWay != nil {
+					onWay()
+					onWay = nil
+				}
 			}
 			if errors.Is(err, errMoved) {
 				// nothing was sent, and nobody failed: the one with room is
@@ -4703,7 +4754,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				failed.wholeIn, failed.wholeOut = call.wholeIn, hw.errBody()
 			}
 			withBodies(&rec, failed)
-			appendUsage(r, rec)
+			appendAdvised(r, rec, call.Usage)
 		}
 		sentMs, ownMs, retriedMs, queuedMs = 0, 0, 0, 0
 		if at := wrote.Load(); at > 0 && call.TTFT > 0 {
@@ -4716,6 +4767,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Status, try.Error, try.Fail = call.Status, call.Error, failCanceled
 			watched.attempt(call, try, c.p.ID, sent, hw, capture)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			break
+		}
+		if hw.stuck != "" {
+			// the vendor said nothing for translatedQuietLongest while the
+			// agent was kept alive (keepQuiet): it is told so, and nobody
+			// else is asked after it has waited that long
+			call.Status, call.Error = http.StatusGatewayTimeout, hw.stuck
+			try.Status, try.Error = call.Status, call.Error
+			watched.attempt(call, try, c.p.ID, sent, hw, capture)
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			if !hw.ended {
+				failTo(w, kept, from, call.Status, hw.stuck)
+			}
 			break
 		}
 		if hw.slow {
@@ -5019,7 +5083,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					refusal.wholeIn, refusal.wholeOut = call.wholeIn, hw.errBody()
 				}
 				withBodies(&rec, refusal)
-				appendUsage(r, rec)
+				appendAdvised(r, rec, call.Usage)
 			}
 			failedRow = nil // its row is written
 			continue
@@ -5064,7 +5128,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					refusal.wholeIn, refusal.wholeOut = call.wholeIn, hw.errBody()
 				}
 				withBodies(&rec, refusal)
-				appendUsage(r, rec)
+				appendAdvised(r, rec, call.Usage)
 			}
 			failedRow = nil // its row is written
 			continue
@@ -5976,7 +6040,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 		withBodies(&rec, &call)
-		appendUsage(r, rec)
+		appendAdvised(r, rec, call.Usage)
 		if call.Status < 400 {
 			// what its model searched with its provider's own tool
 			logNativeSearches(r.Context(), call.Usage.searches, start, call.Agent, call.Provider, where, model)
@@ -6960,6 +7024,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	searchFn := false            // Codex's tool search sent as a function
 	geminiWhole := false         // a Gemini client's generateContent
 	var toolSeen map[string]bool // the call ids the client holds (tool_use_ids.go)
+	advisor := ""                // magpie's id of the advisor model asked for
 	// a model that wants its reasoning text back (#388, #1104)
 	replay := proto == provider.Responses && (replaysReasoning(model, p.VendorHost()) || replaysReasoning(upstream, p.VendorHost()))
 	switch proto {
@@ -7117,7 +7182,13 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// #4910)
 		toolSeen = clientToolUseIDs(body)
 		body = saltedCallIDsBack(body)
-		// Claude Code's advisor, named by magpie's id (advisor.go)
+		// a call no result answers, or a result answering no call, which
+		// Anthropic turns the whole request away for, and every later
+		// one of the conversation with it (tool_blocks_paired.go)
+		body = toolBlocksPaired(body)
+		// Claude Code's advisor, named by magpie's id (advisor.go); its
+		// calls' usage rows go by that id (advisorRows)
+		advisor = advisorKeyModel(advisorAsked(provider.Anthropic, body))
 		body = advisorTools(body, p, upstream, wiresOf(r.Context()), keyAllows(r, p))
 		if p.IsBedrock() {
 			// Claude Code's metadata.user_id, a JSON string these days, is
@@ -7759,7 +7830,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	}
 	f, _ := w.(http.Flusher)
 	sniff := newSniffer(proto, res.Header.Get("Content-Type"))
-	defer func() { u.add(sniff.usage()) }()
+	defer func() { u.add(sniff.usage().advisedAs(advisor)) }()
 	var tidy *chatTidy
 	if proto == provider.Chat && sse {
 		tidy = &chatTidy{}
@@ -10153,7 +10224,8 @@ var keepaliveEvery, keepaliveLongest = 15 * time.Second, 5 * time.Minute
 
 // translatedQuietLongest is how long a translated reply's upstream may
 // say nothing at all, its stream open, while magpie keeps the client
-// alive every keepaliveEvery (keepThroughSilence). A reply that comes in
+// alive every keepaliveEvery (keepThroughSilence), and a reply passed
+// through or held is kept so too (keepQuiet). A reply that comes in
 // one burst at its end (claude-opus-5-5 at effort max, a relay that
 // buffers) is silent for its whole generation, which runs past 10
 // minutes, longer than the 10 minutes magpie gives a vendor for its

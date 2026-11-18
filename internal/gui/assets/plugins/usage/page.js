@@ -1042,7 +1042,7 @@ function renderUsage() {
   // a vendor that counts no cache (cache_unknown) is left out (#3464)
   const hitRate = cacheHitOf(u);
   const hit = u.cache_read && hitRate !== null ? t("hit rate {p}", { p: hitPct(hitRate) }) : "";
-  tile(fmtN(u.cache_read), t("cache read"), hit, u.cache_write ? t("{n} written", { n: fmtN(u.cache_write) }) + cacheTTLs(u, fmtN) : "");
+  tile(fmtN(u.cache_read), t("cache read"), hit, tipOf(hit && cacheHitTip(u), u.cache_write ? t("{n} written", { n: fmtN(u.cache_write) }) + cacheTTLs(u, fmtN) : ""));
   tile(fmtN(u.reasoning), t("reasoning"), t("inside output"));
   tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.credited ? ledCredits(u).textContent : "", u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.canceled ? t("{n} canceled", { n: u.canceled }) : "", u.unpriced ? unpricedCalls(u.unpriced) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
 
@@ -1128,7 +1128,7 @@ function renderUsage() {
     // read tile counts it (#925)
     const hitRate = cacheHitOf(g);
     const hit = g.cache_read && hitRate !== null ? " · " + t("hit rate {p}", { p: hitPct(hitRate) }) : "";
-    num.append(el("b", "", fmtN(usageTokens(g))), el("small", "", t("{a} in · {b} out", { a: fmtN(g.input), b: fmtN(g.output) }) + (g.cache_read ? " · " + t("{n} cached", { n: fmtN(g.cache_read) }) : "") + hit));
+    num.append(el("b", "", fmtN(usageTokens(g))), Object.assign(el("small", "", t("{a} in · {b} out", { a: fmtN(g.input), b: fmtN(g.output) }) + (g.cache_read ? " · " + t("{n} cached", { n: fmtN(g.cache_read) }) : "") + hit), { title: hit && cacheHitTip(g) }));
     r.append(num);
     r.append(el("div", "cost", fmtCost(g, g.provider) || ""));
     if (act) act(r, g);
@@ -2129,9 +2129,9 @@ function ledTierText(r) {
 // said
 function ledDetail(r) {
   const dl = el("dl", "led-dl");
-  const add = (name, value, cls) => {
+  const add = (name, value, cls, title) => {
     if (value === "" || value == null) return;
-    dl.append(el("dt", "", t(name)), el("dd", cls || "", value));
+    dl.append(el("dt", "", t(name)), Object.assign(el("dd", cls || "", value), { title: title || "" }));
   };
   add("Time", new Date(r.t).toLocaleString(intlLang(), { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourClock() }), "led-when");
   {
@@ -2180,7 +2180,7 @@ function ledDetail(r) {
   if (r.computerName) add("Computer", r.computerName);
   // the client's own name, for one the user counts as an agent (#1958)
   add("Client", r.client);
-  add("Cache hit rate", ledHitText(ledCacheHit(r)));
+  add("Cache hit rate", ledHitText(ledCacheHit(r)), "", ledCacheHit(r) === null ? "" : ledHitTip(r));
   // its tokens at every width, the cache's beside in and out: a prompt read
   // from the cache is told from one that missed it, whose input is the
   // whole of it, where the row's cache columns are out of sight (#1839).
@@ -2192,6 +2192,9 @@ function ledDetail(r) {
   if (r.credits != null) add("Credits", ledCredits({ credits: r.credits, credited: 1 }).textContent);
   if (ledRowSpeed(r)) add("Speed", t("{n} tok/s", { n: ledNum(Math.round(ledRowSpeed(r))) }));
   else if (ledFloorSpeed(r)) add("Speed", "≥" + t("{n} tok/s", { n: ledNum(Math.round(ledFloorSpeed(r))) }));
+  // none, and why in words, for a reader who can't hover the dash (ohblue
+  // on X: "why do some show no speed?")
+  else if (!ledFailed_(r) && !r.canceled) add("Speed", "— " + ledNoSpeed_(r), "led-nospeed");
   // what went up to the vendor and came back, its tries summed, and what
   // DeepSeek's image files kept out of it (#5407); a row from before has
   // none of them, and says nothing
@@ -2397,14 +2400,44 @@ function ledShowStatus(to) {
 // ledger with the page (usage.ModelSpeed): failed, canceled and short
 // replies are left out. Sortable by any column; the fastest first.
 let ledSpeedSort = { key: "tps", dir: -1 };
+// by model, or each model on each provider it went to (skingstyle48487 on
+// X, with a dozen relays: which one is slow, which one fails, which one
+// answers with another model), kept as left
+let ledSpeedBy = "model";
+try { ledSpeedBy = localStorage.getItem("magpie.ledSpeedBy") === "provider" ? "provider" : "model"; } catch {}
 const LED_SPEED_COLS = [
   { key: "name", label: "Model", dir: 1 },
   { key: "tps", label: "Speed", dir: -1 },
   { key: "ttft_ms", label: "First token", dir: 1 },
   { key: "requests", label: "Requests", dir: -1 },
 ];
+// a provider's row counts its tries, and how many failed or were answered
+// by another model, beside the speed of those answered
+const LED_PROV_COLS = [
+  { key: "name", label: "Model", dir: 1 },
+  { key: "tps", label: "Speed", dir: -1 },
+  { key: "ttft_ms", label: "First token", dir: 1 },
+  { key: "tries", label: "Requests", dir: -1 },
+  { key: "fail", label: "Failed", dir: -1 },
+  { key: "swapped", label: "Other model", dir: -1 },
+  { key: "right", label: "Answers", dir: -1 },
+  { key: "tools", label: "Tool calls", dir: -1 },
+];
+const ledFail = (x) => x.tries ? (x.failed || 0) / x.tries : 0;
+// the last check of each model on each provider (relaycheck.js relayKeep):
+// its right answers and right tool calls, set beside the other providers'
+function ledChecks() {
+  try { return JSON.parse(localStorage.getItem("magpie.relayChecks") || "{}") || {}; } catch { return {}; }
+}
+const ledCheckShare = (x, key) => {
+  const c = x.check, of = c && (key === "tools" ? c.tools_of : c.of);
+  return of ? (key === "tools" ? c.tools : c.right) / of : -1;
+};
+let ledSpeedLast;
+window.addEventListener("magpie-relay-checked", () => { if (ledSpeedLast && $("#ledSpeed")) drawLedSpeed(ledSpeedLast); });
 function ledSpeedOrder(list) {
   const { key, dir } = ledSpeedSort;
+  const nm = (x) => (x.name || x.model) + (x.provider_name ? "\u0000" + x.provider_name : "");
   return [...list].sort((a, b) => {
     // a model with nothing measured goes last, whichever way it is sorted
     if (key === "tps" || key === "ttft_ms") {
@@ -2412,30 +2445,59 @@ function ledSpeedOrder(list) {
       if (!x !== !y) return x ? -1 : 1;
       if (x !== y) return dir * (x - y);
     } else if (key === "name") {
-      const c = (a.name || a.model).localeCompare(b.name || b.model);
+      const c = nm(a).localeCompare(nm(b));
       if (c) return dir * c;
-    } else if (a[key] !== b[key]) return dir * (a[key] - b[key]);
-    return b.requests - a.requests || (a.name || a.model).localeCompare(b.name || b.model);
+    } else if (key === "fail") {
+      const c = ledFail(a) - ledFail(b);
+      if (c) return dir * c;
+    } else if (key === "right" || key === "tools") {
+      // a provider not checked goes last, whichever way it is sorted
+      const x = ledCheckShare(a, key), y = ledCheckShare(b, key);
+      if ((x < 0) !== (y < 0)) return x < 0 ? 1 : -1;
+      if (x !== y) return dir * (x - y);
+    } else if ((a[key] || 0) !== (b[key] || 0)) return dir * ((a[key] || 0) - (b[key] || 0));
+    return (b.requests ?? b.tries) - (a.requests ?? a.tries) || nm(a).localeCompare(nm(b));
   });
 }
 function drawLedSpeed(l) {
   const box = $("#ledSpeed");
-  const list = l.speeds || [];
-  box.hidden = !list.length;
+  ledSpeedLast = l;
+  const byProv = ledSpeedBy === "provider";
+  const checks = byProv ? ledChecks() : {};
+  const list = ((byProv ? l.provider_speeds : l.speeds) || []).map((x) => byProv ? { ...x, check: checks[x.provider + "\u0000" + x.model] } : x);
+  box.hidden = !(l.speeds?.length || l.provider_speeds?.length);
   box.replaceChildren();
   if (box.hidden) return;
   const head = el("div", "led-bar");
   const title = el("b", "led-spd-t", t("Model speed"));
   title.title = t("Medians of the answered requests that wrote {n} tokens or more", { n: l.speed_min || 100 });
-  head.append(title);
-  const table = el("table", "led-spd");
+  const by = sessSegs([["model", "Models"], ["provider", "Providers"]], ledSpeedBy, (to) => {
+    ledSpeedBy = to;
+    try { localStorage.setItem("magpie.ledSpeedBy", to); } catch {}
+    if (!LED_SPEED_COLS.concat(to === "provider" ? LED_PROV_COLS : []).some((c) => c.key === ledSpeedSort.key)) ledSpeedSort = { key: "tps", dir: -1 };
+    drawLedSpeed(l);
+    $("#ledSpeed .segs .opt.on")?.focus({ preventScroll: true });
+  });
+  by.classList.add("led-spd-by");
+  head.append(title, el("span", "grow"), by);
+  // Other model shows once a reply named another model than the one asked
+  // for, and Answers and Tool calls once a provider was checked; nothing
+  // to say before
+  const checked = list.some((x) => x.check);
+  const cols = byProv ? LED_PROV_COLS.filter((c) => (c.key !== "swapped" || list.some((x) => x.swapped)) && (!["right", "tools"].includes(c.key) || checked)) : LED_SPEED_COLS;
+  if (!cols.some((c) => c.key === ledSpeedSort.key)) ledSpeedSort = { key: "tps", dir: -1 };
+  const table = el("table", "led-spd" + (byProv ? " by-prov" : ""));
   const hr = el("tr");
-  for (const c of LED_SPEED_COLS) {
+  for (const c of cols) {
     const th = el("th", c.key === "name" ? "nm" : "n");
     const on = ledSpeedSort.key === c.key;
     th.setAttribute("aria-sort", on ? (ledSpeedSort.dir > 0 ? "ascending" : "descending") : "none");
     const b = el("button", "led-spd-h" + (on ? " on" : ""), t(c.label));
     b.type = "button";
+    if (c.key === "fail") b.title = t("Tries that failed, those handed on to another provider too");
+    if (c.key === "swapped") b.title = t("Replies that named another model than the one asked for");
+    if (c.key === "right") b.title = t("Right answers in the last check of the model on this provider");
+    if (c.key === "tools") b.title = t("Right tool calls in the last check of the model on this provider");
     b.onclick = () => {
       ledSpeedSort = on ? { key: c.key, dir: -ledSpeedSort.dir } : { key: c.key, dir: c.dir };
       drawLedSpeed(l);
@@ -2444,6 +2506,7 @@ function drawLedSpeed(l) {
     th.append(b);
     hr.append(th);
   }
+  if (byProv) hr.append(el("th", "act"));
   const thead = el("thead");
   thead.append(hr);
   const body = el("tbody");
@@ -2451,10 +2514,46 @@ function drawLedSpeed(l) {
     const tr = el("tr");
     const name = el("td", "nm", x.name || x.model);
     name.title = x.name || x.model;
+    if (byProv) {
+      const sub = el("div", "led-spd-prov", x.provider_name || x.provider);
+      name.title += " · " + sub.textContent;
+      name.append(sub);
+    }
     tr.append(name,
       el("td", "n" + (x.tps ? "" : " faint"), x.tps ? t("{n} tok/s", { n: ledNum(Math.round(x.tps)) }) : "—"),
-      el("td", "n" + (x.ttft_ms ? "" : " faint"), x.ttft_ms ? ledTook(x.ttft_ms) : "—"),
-      el("td", "n", ledNum(x.requests)));
+      el("td", "n" + (x.ttft_ms ? "" : " faint"), x.ttft_ms ? ledTook(x.ttft_ms) : "—"));
+    if (!byProv) {
+      tr.append(el("td", "n", ledNum(x.requests)));
+      body.append(tr);
+      continue;
+    }
+    const f = ledFail(x);
+    const fail = el("td", "n" + (x.failed ? "" : " faint"), x.failed ? (f < 0.001 ? "<0.1%" : (f * 100).toFixed(f < 0.1 ? 1 : 0) + "%") : "0");
+    fail.title = t("{n} of {m} failed", { n: ledNum(x.failed || 0), m: ledNum(x.tries) });
+    tr.append(el("td", "n", ledNum(x.tries)), fail);
+    if (cols.some((c) => c.key === "swapped")) {
+      const sw = el("td", "n" + (x.swapped ? "" : " faint"), ledNum(x.swapped || 0));
+      sw.title = t("{n} of {m} replies named another model", { n: ledNum(x.swapped || 0), m: ledNum(x.tries) });
+      tr.append(sw);
+    }
+    for (const key of checked ? ["right", "tools"] : []) {
+      const c = x.check, of = c && (key === "tools" ? c.tools_of : c.of), n = c && (key === "tools" ? c.tools : c.right);
+      const td = el("td", "n" + (!of ? " faint" : n < of ? " off" : ""), of ? n + "/" + of : "—");
+      if (of) td.title = t("{n} of {m} right, checked {when}", { n, m: of, when: ago(c.at) });
+      tr.append(td);
+    }
+    // a check of this model on this provider: a few small real calls, made
+    // only on the press (relaycheck.js)
+    const act = el("td", "act");
+    const go = el("button", "text led-spd-check", t("Check…"));
+    go.type = "button";
+    go.title = t("Check {model} on {provider} with a few small real calls", { model: x.name || x.model, provider: x.provider_name || x.provider });
+    go.onclick = async () => {
+      try { window.relayCheck || await import(new URL("relaycheck.js", document.baseURI).href); } catch (err) { return status(err.message, "err"); }
+      relayCheck(x.provider, x.model, x.provider_name || x.provider, x.name || x.model);
+    };
+    act.append(go);
+    tr.append(act);
     body.append(tr);
   }
   table.append(thead, body);
@@ -2647,7 +2746,7 @@ function renderLedgerDash(l) {
   // the count in the words the quick panel uses too, the whole sentence on
   // hover (tenacious_eagle on Discord)
   block("Cost", c || "—", line(l.unpriced ? unpricedCalls(l.unpriced) : t("effective prices")), c ? "cost" : "", l.unpriced ? unpricedCallsWhy(l.unpriced) : "");
-  const hit = block("Cache hit rate", rate === null ? "—" : hitPct(rate, 2), cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", t("The share of the prompt read from the cache"));
+  const hit = block("Cache hit rate", rate === null ? "—" : hitPct(rate), cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", tipOf(t("The share of the prompt read from the cache"), rate === null ? "" : cacheHitTip(l)));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = (100 * (rate || 0)).toFixed(1) + "%";
   meter.append(fill);
@@ -3237,9 +3336,11 @@ new ResizeObserver(() => {
 // (#3464) or a request with no prompt counted
 const ledCacheHit = (r) => r.cache_unknown ? null : cacheHitOf({ input: r.in, cache_read: r.cache_read, cache_write: r.cache_write });
 const ledHitText = (h) => h === null ? "" : hitPct(h);
+// its exact rate, on hover
+const ledHitTip = (r) => cacheHitTip({ input: r.in, cache_read: r.cache_read, cache_write: r.cache_write });
 const LED_COLS = [
   ["Time"], ["Agent"], ["Requested"], ["Provider · account"], ["Sent", "", true], ["Served"], ["Effort", "", true],
-  ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cache hit rate", "n", 2, "The share of the prompt read from the cache"], ["Cost", "n"], ["TTFT", "n", 2, "Time to first token"], ["Duration", "n"], ["Speed", "n"], ["Status"],
+  ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cache hit rate", "n", 2, "The share of the prompt read from the cache"], ["Cost", "n"], ["TTFT", "n", 2, "Time to first token"], ["Duration", "n"], ["Speed", "n", 0, "Output tokens a second after the first, over the streamed replies"], ["Status"],
 ];
 
 // a window under a second after a wait over four times longer: the reply came
@@ -3757,7 +3858,7 @@ function renderLedger() {
       td(fmtN(r.cache_read || 0), "n" + (r.cache_read ? "" : " faint"), exactN(r.cache_read));
     }
     const hit = ledHitText(ledCacheHit(r));
-    td(hit || "—", "n cache-hit" + (hit ? "" : " faint"), r.cache_unknown ? t("The vendor doesn't count the cache") : t("Cache hit rate") + ": " + t("The share of the prompt read from the cache"));
+    td(hit || "—", "n cache-hit" + (hit ? "" : " faint"), r.cache_unknown ? t("The vendor doesn't count the cache") : tipOf(hit && ledHitTip(r), t("Cache hit rate") + ": " + t("The share of the prompt read from the cache")));
     // what the reply said it cost in its plan's credits (WorkBuddy's
     // usage.credit, #2512), on its own row as on the ranking's line
     // (jiabubu on Discord): in place of the dash a plan's model has for a
@@ -4564,7 +4665,7 @@ function renderSessions() {
     tile(c || "—", t("cost"), unpricedModels || t("at effective prices"), unpricedNote);
     // input leaves out what was read from the cache and written to it
     const prompt = tot.input + tot.cache_read + tot.cache_write;
-    tile(fmtN(tot.cache_read), t("cache read"), tot.cache_read && prompt ? t("hit rate {p}", { p: hitPct(tot.cache_read / prompt) }) : "", tot.cache_write ? t("{n} written", { n: fmtN(tot.cache_write) }) : "");
+    tile(fmtN(tot.cache_read), t("cache read"), tot.cache_read && prompt ? t("hit rate {p}", { p: hitPct(tot.cache_read / prompt) }) : "", tipOf(tot.cache_read && hitTip(tot.cache_read, prompt), tot.cache_write ? t("{n} written", { n: fmtN(tot.cache_write) }) : ""));
     tile(active == null ? "—" : fmtDur(active), t("active"), active == null ? t("not kept by model") : t(days === 1 ? "on {n} day" : "on {n} days", { n: days }),
       t("The time the sessions were at work: the pauses between one message and the next, each under five minutes"), "dur");
     // how many folders, and how much of it the first took
@@ -5656,6 +5757,15 @@ function renderQuotaTrend() {
   };
 }
 
+// setQuotaRange: the trend's range, kept; only this page picks one, so it
+// lives here and not in app.js
+function setQuotaRange(id) {
+  if (id === quotaRange) return;
+  quotaRange = id;
+  try { localStorage.setItem("magpie.quotaRange", id); } catch {}
+  // A range also restores today's meters when leaving a historical cycle.
+  renderQuotas();
+}
 // quotaDaysField: the trend head's button as a field for a number of days,
 // 1 to 45; Enter picks it, Escape or a bad number leaves the range as it was
 function quotaDaysField(b) {

@@ -441,6 +441,11 @@ covers them), and `sessions/manage` carries the same as `reads`. While
 `asked` is false the Sessions page shows the consent (`consentCard` in
 the sessions plugin): each agent found with a switch, off; Allow selected
 saves `all: false` with each agent picked or not, Allow all `all: true`.
+A choice with `all` false reads no agent it doesn't name, so one found
+after it (Antigravity 2.0 installed after Allow selected: baysonfox on
+X) is `new` in `found` (on disk, not named, not read), and the Sessions
+page asks about those once (`laterCard`): Show their sessions sends
+each `true`, Keep off `false`, so it isn't new again.
 Settings › Privacy, *Agents' session history* (`renderSessionReads` in
 the sessions plugin's `settings.js`), has *Agents found later* (`all`, sent with each listed agent
 at the value its row shows) and a row per agent.
@@ -504,6 +509,26 @@ Codex's newest rollout's last line before magpie restarts Codex
 `TestFreshInstallReadsNoAgentUntilAllowed`,
 `TestSettleReadsKeepsWhatWasThere`, `TestSessionReadsRoutes`,
 `sessions-reads.test.cjs`.
+
+LiveAgent's sessions (#6741,
+[`liveagent.go`](../../internal/sessions/liveagent.go)) are K-brain's
+`<root>/sessions/<project>/<id>/session.jsonl` (older ones right under
+`sessions`; `.runs` and `.deleted-history` are skipped), the root found by
+the rule `agent.liveAgentDir` uses (`sessions.LiveAgentDirIn`:
+`$LIVEAGENT_HOME`, `$K_BRAIN_HOME`, `~/.liveagent/data-dir.json`,
+`~/.liveagent`). K-brain rewrites the whole file, so it is parsed whole.
+Its first line, `session_meta`, gives the id, title, cwd and the running
+totals (`usage_in` with cache reads and writes in it, `usage_cached`,
+`usage_out`, `model_usage` by `"<model> @ <provider>"`); each reply's own
+`usage` counts on its day, and what the totals hold beyond those replies
+(a compaction's call, a rewound reply) plus `sub_usage` counts on the last
+message's day. A fork's copies (`seq` up to `fork_seq`) are its source's
+and count in neither. A subagent's session (`task-<parent>-<task>`,
+`task_id` set) is filed under its parent with its tools but no tokens:
+they are the parent's `sub_usage`. There is no Calls reader, as the
+gateway's own record of LiveAgent's calls carries no session, and no
+resume command or delete. Tests: `TestLiveAgentSessions` (the issue's
+literal `session_meta`), `TestLiveAgentTranscript`, `TestLiveAgentRoot`.
 
 ## Local Gateway Conversation Recording
 
