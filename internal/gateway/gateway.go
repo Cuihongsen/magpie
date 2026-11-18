@@ -1781,6 +1781,11 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		antigravityModels(w, r)
 		return
 	}
+	// OpenCode's magpie plugin's (opencode_models.go)
+	if f := r.URL.Query().Get("format"); f == OpenCodeFormat || f == OpenCode2Format {
+		openCodeModels(w, r, f == OpenCode2Format)
+		return
+	}
 	if waitsForList(r) {
 		// another magpie waiting for the list to change (models_wait.go)
 		s.modelsOnceChanged(w, r)
@@ -7104,6 +7109,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// shape wants (#292).
 		if refusesLoneToolChoice(p) {
 			body = withoutLoneToolChoice(body)
+		}
+		// Open Design's amr-link answers Codex's compaction summary, its
+		// one request with no tools, 400 upstream_error: it is sent no
+		// empty tools and no choice beside them (opendesign_tools.go)
+		if openDesign(p) {
+			body = withoutEmptyTools(body)
 		}
 	case provider.Chat:
 		if p.RejectsTemperature(model) {
