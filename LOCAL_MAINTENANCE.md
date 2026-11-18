@@ -165,6 +165,15 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4497 合并
+
+2026-11-19 合并官方 `v0.1.4497`：15 个提交、82 个文件（+6,044/−252）。
+重点包括修复工具调用后的文本顺序，避免 DeepSeek 误判调用已被回答；
+更新重启失败时正确退出；Claude 受限模型路由到有 Claude Code 权限的
+账户；Codex 账户额度用尽后切换 Magpie 模型；图片 1K/2K/4K 分辨率设置、
+Copilot WebSocket 增量响应和 MCP 网络错误处理等。合并无冲突，本地
+重试、冷却、时间窗和 fork 签名更新配置保持不变。
+
 ## 官方 v0.1.4483 合并
 
 2026-11-18 合并官方 `v0.1.4483`：18 个提交、123 个文件（+4,056/−435）。
