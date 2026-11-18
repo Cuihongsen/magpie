@@ -120,7 +120,7 @@ line; agents connected to magpie lose it when it quits.
 | Air (JetBrains IDEs) | `~/.jetbrains/acp.json` (`%USERPROFILE%\.jetbrains\acp.json` on Windows; the Air plugin in 2026.2+ IDEs, shared with AI Assistant's custom agents) + `magpie-opencode.json` beside it | model (the same `Magpie` ACP agent as the Air app's, in Air's agent menu in the IDE; needs OpenCode installed; a `Magpie (WSL <distro>)` agent too for each running WSL distro that has OpenCode, for WSL projects) |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
 | Crush        | `~/.config/crush/crush.json`      | large, small    |
-| DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
+| DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Models › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
 | Reasonix Studio (2.x, or a native Go `reasonix` 2.x / 1.39.x CLI) | `~/.reasonix/config.toml` + `.env` (`%APPDATA%/reasonix` on Windows; `$REASONIX_HOME`) | model (Executor), planner (Plan), effort (a dedicated `magpie` provider, shared by Studio and the native CLI) |
 | Command Code | `~/.commandcode/settings.json` (+ `providers.json`) | model |
 | fx           | `~/.fx/settings.json`             | model (a keyless `magpie` provider) |
@@ -417,6 +417,17 @@ agent's own User-Agent" unticked) sends magpie's in its place;
 `user-agent=agent` is the default again. A signed-in account, a plugin's
 and a vendor whose own client magpie goes as (OpenCode, Cline, Kilo) keep
 the User-Agent their sign-in sends, and don't take it.
+
+`magpie provider set <id> search=yes` (the editor's Advanced › Web search,
+"Searches the web by itself") is for a relay in front of Anthropic's or
+OpenAI's own API that runs web search itself. Claude Code's WebSearch,
+Codex's `web_search` tool and Codex's web.run (its `POST /v1/alpha/search`)
+then go to the relay as they were sent, with its key, instead of through
+magpie's search; the relay's answer goes back as it came. If the relay's
+search fails, magpie searches in its place and says why. In a routing group
+the member a turn would go to first decides. `search=no`, the default,
+keeps magpie's search; Settings › Models › Web search set to magpie's
+search for models that search by themselves wins over it.
 
 `magpie usage` (and `--csv`) takes `today`, `7d`, `30d` or `all`, each from a
 local midnight, or a window ending now: `--last 24h` (any Go duration, `90m`)
@@ -4144,6 +4155,7 @@ magpie backup --no-keys ~/b.magpie-backup   # the same with no API keys in it
 magpie restore magpie.magpie-backup         # on the other machine
 magpie restore --no-agents b.magpie-backup  # providers, settings, profiles; agents left as they are
 magpie restore --no-library b.magpie-backup # the library here left as it is
+magpie backup --no-usage ~/b.magpie-backup  # no usage history in it
 ```
 
 A backup holds your providers (with their keys, unless `--no-keys`), the
@@ -4171,7 +4183,11 @@ name the ones still to sign in to. The plugins added from npm or git come
 along too and are installed where it is put back (one added from a folder
 stays on its machine; without keys, an option whose name looks like a key
 is left out); a plugin's sign-in is not carried, a plugin already there is
-left as it is, and one removed on one machine stays on the others. Piped
+left as it is, and one removed on one machine stays on the others. The usage history comes
+along too (unless `--no-usage`): every call in `usage.jsonl`, gzipped, and
+the quota cards' history. Restoring merges it with the history there: a call
+already there is never added again, so restoring the same backup twice counts
+nothing twice (`magpie restore --no-usage` leaves it out). Piped
 in, the passphrase is the first line of stdin.
 
 ### Keeping machines in sync
@@ -4624,7 +4640,13 @@ and models to look after first, by magpie's own ids only:
   installed and on (npm names, or `github:owner/repo` for a repository
   tagged `magpie-plugin`; never a folder, a private repository or an
   unlisted package), with the same id, so Discover can say how many use
-  each (the ids that reported it in 7 days). A like on a plugin's page
+  each (the ids that reported it in 7 days). The same report names the
+  Library's MCP servers that an agent is given and that the market lists
+  from what ships with magpie (featured, or the registry snapshot), by
+  their market ids only (`context7`, `io.github.owner/name`; at most 50),
+  so the market can put the most used first; a server of the user's own,
+  one found only by a search, and its address, command or keys never go
+  (`library.PublicServers`). A like on a plugin's page
   goes there too, only for a plugin installed here, and is kept in
   `~/.config/magpie/plugin-likes.json`. The code is
   [internal/stats/plugins.go](../internal/stats/plugins.go) and

@@ -165,6 +165,30 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4456 合并
+
+2026-11-18 合并官方 `v0.1.4456`（当时 latest；`v0.1.4457` 只有 tag，
+尚未发布）：区间 125 个提交、495 个文件（+23,448/−2,258）。重点包括
+`/api/state` 不再返回代理密码、LAN key、Bark key 和 GitHub token；
+Slow/Context/Compact 路由组保存修复；分组 Routing/Window 与 provider
+设置一致；Claude 工具调用不再 120 秒后转后台；被 Anthropic 停用的
+Claude 账户标记受限并让出；滞留流 30 分钟结束；并行会话接近额度上限
+时的计数修复；以及 Codex/Claude 的多项兼容性改进。
+
+冲突集中在 `internal/gui/assets/i18n.js`（四种语言的本地重试/冷却
+文案与上游新文案并排保留）、`internal/gui/assets/plugins/routing/
+client.js`（保留分组时间窗标签，同时接入上游 `memberLine` 排版）和
+`internal/gui/assets/plugins/routing/routing.css`（同时保留本地
+`.rt-window` 与上游 `.mn` 样式）。网关、provider 和更新器没有冲突，
+本地 `crazy_retry.go`、`error_cooldown.go`、`groupwindow.go` 及 fork
+签名更新配置均保留。
+
+验证：`make build` 通过；gateway 定制回归 111 项、provider/GUI/CLI
+定向 33 项、`internal/update` 240 项、GUI/多语言 Node 测试 14 项通过。
+本机上游自带的 Claude account-off 测试在未改动的 `v0.1.4456` 上同样
+失败，属于本机测试环境问题，不是本次合入引入；未据此声称全量测试
+通过。
+
 ## 官方 v0.1.4367 合并
 
 2026-11-17 合并官方 `v0.1.4367`：保留渠道疯狂重试、错误冷却、

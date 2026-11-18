@@ -448,6 +448,21 @@ type mdModel struct {
 		Output []string `json:"output"`
 	} `json:"modalities"`
 	Cost *Price `json:"cost"`
+	// Experimental's modes are the other ways the vendor serves the model
+	// and what each costs: OpenAI's "fast" is service_tier "priority",
+	// its "ultrafast" and "flex" those tiers, Anthropic's "fast" speed
+	// "fast" (TierPrice)
+	Experimental struct {
+		Modes map[string]struct {
+			Cost     *Price `json:"cost"`
+			Provider struct {
+				Body struct {
+					ServiceTier string `json:"service_tier"`
+					Speed       string `json:"speed"`
+				} `json:"body"`
+			} `json:"provider"`
+		} `json:"modes"`
+	} `json:"experimental"`
 	// Canonical is the model models.dev says this entry is, as
 	// "maker/model": DeepSeek lists V4.1 Flash as deepseek-flash, its
 	// canonical deepseek/deepseek-v4.1-flash, the id everyone else serves
@@ -587,6 +602,10 @@ var (
 	windows map[string]int
 	// outputs are the most tokens their replies may hold, likewise
 	outputs map[string]int
+	// wholes are the context windows, prompt and reply together, that
+	// models.dev gives beside an input limit below them, by bare id and
+	// that input limit: gpt-6.2-sol's 1050000 beside its 922000 (WholeOf)
+	wholes map[string]map[int]int
 	// efforts are the models' reasoning levels, by bare id, as most of the
 	// providers that give any for them give them
 	efforts map[string][]string
@@ -670,6 +689,7 @@ func loadGen() (map[string]mdProvider, int) {
 					votes, reasons := map[string]int{}, map[string]int{}
 					named := map[string]map[string]int{}
 					sizes, outs := map[string]map[int]int{}, map[string]map[int]int{}
+					whole := map[string]map[int]map[int]int{}
 					levels := map[string]map[string]int{}
 					kinds := map[string]map[string]int{}
 					voted := map[string]bool{}
@@ -734,6 +754,15 @@ func loadGen() (map[string]mdProvider, int) {
 							}
 							sizes[who][w]++
 						}
+						if in, ctx := Window(x.Limit.Input), Window(x.Limit.Context); in > 0 && ctx > in {
+							if whole[who] == nil {
+								whole[who] = map[int]map[int]int{}
+							}
+							if whole[who][in] == nil {
+								whole[who][in] = map[int]int{}
+							}
+							whole[who][in][ctx]++
+						}
 						if o := x.Limit.Output; o > 0 {
 							if outs[who] == nil {
 								outs[who] = map[int]int{}
@@ -796,6 +825,13 @@ func loadGen() (map[string]mdProvider, int) {
 					for id, by := range sizes {
 						windows[id] = mostGiven(by)
 					}
+					wholes = map[string]map[int]int{}
+					for id, ins := range whole {
+						wholes[id] = map[int]int{}
+						for in, by := range ins {
+							wholes[id][in] = mostGiven(by)
+						}
+					}
 					outputs = map[string]int{}
 					for id, by := range outs {
 						outputs[id] = mostGiven(by)
@@ -853,6 +889,7 @@ func Reset() {
 	gen++
 	resets.Add(1)
 	mdev, images, inputs, windows, outputs, efforts, thinks, names, listed, canonical, labs, normal = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
+	wholes = nil
 	loadMu.Unlock()
 	if Forget != nil {
 		Forget()
@@ -947,6 +984,54 @@ func PriceOf(providerID, modelID string) (Price, bool) {
 	if p, ok := load()[providerID]; ok {
 		if m, ok := p.Models[modelID]; ok && m.Cost != nil {
 			return *m.Cost, true
+		}
+	}
+	return Price{}, false
+}
+
+// TierPrice is what a model's maker bills it at a service tier, as
+// models.dev lists it under the model's modes, when std is the model's
+// standard price there: a price a user, a relay or another vendor set is
+// theirs, and isn't moved. The tier is OpenAI's service_tier word
+// ("priority", Fast's; "ultrafast"; "flex") or "fast", Claude's speed
+// (bodyTier). OpenAI's pricing page has gpt-6.1-sol's Fast (Priority
+// processing until 2026-07-30) at $4/$20/$0.20 cached, twice its standard,
+// and Ultrafast at six times; Anthropic's has Claude Opus 5.5's fast mode
+// at $8/$40, twice too, "across the full context window". A mode lists no
+// long-context price or 1-hour cache write, so std's are scaled by the
+// mode's own ratio to std, part by part.
+func TierPrice(std Price, model, tier string) (Price, bool) {
+	tier = strings.ToLower(strings.TrimSpace(tier))
+	if tier == "" || tier == "default" || tier == "auto" {
+		return Price{}, false
+	}
+	all := load()
+	for _, maker := range []string{"openai", "anthropic"} {
+		m, ok := all[maker].Models[model]
+		if !ok || m.Cost == nil || !m.Cost.Same(std) {
+			continue
+		}
+		for _, mode := range m.Experimental.Modes {
+			c, body := mode.Cost, mode.Provider.Body
+			if c == nil || !(strings.EqualFold(body.ServiceTier, tier) || tier == "fast" && body.Speed == "fast") {
+				continue
+			}
+			ratio := func(mode, base float64) float64 {
+				if base <= 0 {
+					return 1
+				}
+				return mode / base
+			}
+			at := Price{Input: c.Input, Output: c.Output, CacheRead: c.CacheRead, CacheWrite: c.CacheWrite, CacheWrite1h: c.CacheWrite1h, Peak: std.Peak}
+			if at.CacheWrite1h == 0 {
+				at.CacheWrite1h = std.CacheWrite1h * ratio(c.CacheWrite, std.CacheWrite)
+			}
+			for _, t := range std.Tiers {
+				at.Tiers = append(at.Tiers, Tier{Above: t.Above, Input: t.Input * ratio(c.Input, std.Input), Output: t.Output * ratio(c.Output, std.Output),
+					CacheRead: t.CacheRead * ratio(c.CacheRead, std.CacheRead), CacheWrite: t.CacheWrite * ratio(c.CacheWrite, std.CacheWrite),
+					CacheWrite1h: t.CacheWrite1h * ratio(c.CacheWrite, std.CacheWrite)})
+			}
+			return at, true
 		}
 	}
 	return Price{}, false
@@ -1529,6 +1614,43 @@ func kindOrder(ks []string) []string {
 // Ark's kimi-k3-1-pro-261024 has kimi-k3.1-pro's window. A window the
 // vendor's own list gives is read before this, by the caller, and stays.
 func ContextOf(id string) int { return contextAs(id, true) }
+
+// WholeOf is the context window, prompt and reply together, that
+// models.dev gives model id beside an input limit of window: 1050000 for
+// gpt-6.2-sol told 922000, the input limit Context holds (window). 0 when
+// none of its entries pairs that input limit with a larger context: a
+// window the user typed, or one a vendor's own list gives, is a window of
+// its own, and an agent that takes both (OpenCode's limit.context and
+// limit.input) is told it alone, as before. The id is looked up as
+// ContextOf looks it up: a relay's spelling or a snapshot of it.
+func WholeOf(id string, window int) int {
+	if window <= 0 {
+		return 0
+	}
+	load()
+	return wholeIn(bareID(id), window, true)
+}
+
+func wholeIn(b string, window int, spellings bool) int {
+	if w, ok := found(b, wholes); ok {
+		return w[window]
+	}
+	if !spellings {
+		return 0
+	}
+	if r, _, ok := renamed(b); ok {
+		if w := wholeIn(r, window, false); w > 0 {
+			return w
+		}
+	}
+	if n, ok := normalFor(b); ok {
+		return wholeIn(n, window, false)
+	}
+	if t, ok := untagged(b); ok {
+		return wholeIn(t, window, true)
+	}
+	return 0
+}
 
 // contextAs is ContextOf, with another spelling (normalFor), the model
 // the user said it is the same as (UserSame) and a tag in brackets taken

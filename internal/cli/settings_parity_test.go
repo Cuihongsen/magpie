@@ -258,6 +258,7 @@ var notYet = map[string]string{
 	"POST /api/appearance/wallpaper":             W,  // appearance.go: the picture comes from the window's file picker
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
 	"POST /api/quit/disconnect":                  W,  // api.go: the Quit question's Disconnect and quit, which quits the app
+	"POST /api/restart":                          W,  // restart.go: the app starting itself again, as the tray's Restart magpie does
 	"POST /api/page-away":                        W,  // api.go: the page says it went from view, so its caches can go
 	"GET /api/remote":                            W,  // remote.go: another magpie opened in a window of the app
 	"POST /api/remote":                           W,  // remote.go
@@ -278,6 +279,7 @@ var notYet = map[string]string{
 	"POST /api/profile/{action}":                 A,  // api.go
 	"POST /api/proxy/check":                      S2, // api.go
 	"POST /api/pipelines/check":                  S2, // pipecheck.go: Settings › Models' Quick check, one real call a pipeline
+	"POST /api/relay-check":                      S2, // pipecheck.go: the Usage speed card by provider, its check button: a few small real calls to one model on one provider
 	"POST /api/proxies/save":                     S2, // proxies.go: Settings › Network's saved proxies
 	"POST /api/proxies/delete":                   S2, // proxies.go
 	"POST /api/proxies/test":                     S2, // proxies.go
