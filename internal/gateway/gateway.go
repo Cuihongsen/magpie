@@ -499,7 +499,7 @@ type Call struct {
 	// it was streamed (#196)
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
-	// FirstReasoning is the start of paced visible reasoning, absent for hidden reasoning.
+	// FirstReasoning: ms to the reply's first sign of reasoning, streamed or sealed (a reasoning delta, a reasoning item's or thinking block's start); 0 for none.
 	FirstReasoning  int64 `json:"firstReasoning,omitempty"`
 	ReasoningHidden bool  `json:"reasoningHidden,omitempty"`
 	// Flow: the ms its content took to come, from where its speed is
@@ -553,6 +553,7 @@ type Server struct {
 	// refused as signed for another conversation (thinking_bound.go)
 	refusedThinking map[string]bool
 	subscription    *subscriptionBridge
+	sessionsSaved   chan struct{} // closed after the predecessor has persisted its Claude sessions
 	// imageStore is the image MCP server's jobs and images (image_mcp.go)
 	imageStore imageMCPStore
 	// browser is the Magpie Browser extensions connected (browser.go)
@@ -660,11 +661,12 @@ func New() *Server {
 		// (netproxy.HTTP1, which provider/codex_http1.go sets); a vendor's
 		// redirect is followed to its own origin only, so its key goes
 		// nowhere else (provider.KeepsCredentials)
-		client:       &http.Client{Transport: rpmTransport{upstreamTransport()}, CheckRedirect: provider.KeepsCredentials},
-		unfit:        make(map[string]bool),
-		subscription: newSubscriptionBridge(),
-		debug:        os.Getenv("MAGPIE_DEBUG") != "",
-		sightFile:    sightsPath(),
+		client:        &http.Client{Transport: rpmTransport{upstreamTransport()}, CheckRedirect: provider.KeepsCredentials},
+		unfit:         make(map[string]bool),
+		subscription:  newSubscriptionBridge(),
+		sessionsSaved: make(chan struct{}),
+		debug:         os.Getenv("MAGPIE_DEBUG") != "",
+		sightFile:     sightsPath(),
 	}
 	s.loadSights()
 	return s
@@ -1003,6 +1005,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			log.Printf("gateway: ending before image descriptions could all be saved; the next start may describe them again")
 		}
 		s.subscription.abortAll()
+		close(s.sessionsSaved)
 		provider.FlushServed() // what answered last, kept for the next start and the CLI
 		flushSticks()          // who answered which conversation, for the next start or the magpie handed over to
 		// the MCP servers the hub started end with the gateway
@@ -4333,8 +4336,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// account whose own list doesn't is asked for priority (Fast)
 		// instead, which every plan with Fast takes (yxinyu715 on X): asked
 		// by the client in either of OpenAI's APIs, or by a pick (#1954)
+		// OpenAI's own Chat Completions turns Ultrafast away, which its
+		// Responses take (OoopsHh on X), so there it goes as Fast too
 		openAI := from == provider.Chat || from == provider.Responses
-		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && from == provider.Anthropic) && !takesTier(c, "ultrafast") {
+		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && from == provider.Anthropic) && (!takesTier(c, "ultrafast") || from == provider.Chat && chatNoUltra(c.p)) {
 			if j := tierMate(cands[i+1:], c, "ultrafast"); j >= 0 {
 				j += i + 1
 				cs := slices.Clone(cands)
@@ -4717,7 +4722,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		try.Entry, try.EntryWhy = entryOf()
 		try.Swapped, try.Routed = swapped(asName, call.Usage.Served) && !usage.ListedAs(c.p.ID, c.model, call.Usage.Served), usage.GroupRouted(asName, call.Usage.Served)
 		try.TTFT, try.FirstText = hw.first.ms()
-		try.FirstReasoning = hw.first.reasoningMs(call.To)
+		try.FirstReasoning = hw.first.reasoningMs()
 		try.ReasoningHidden = hw.first.hidesReasoning(call.To, call.Usage.billed().Reasoning)
 		call.ReasoningHidden = try.ReasoningHidden
 		try.Flow = hw.first.flowFor(call.Usage.Reasoning)
@@ -4727,7 +4732,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.TTFT, call.FirstText = sinceStart(began.Sub(start), hw.first.first), sinceStart(began.Sub(start), hw.first.text)
 		call.FirstReasoning = 0
 		if try.FirstReasoning > 0 {
-			call.FirstReasoning = sinceStart(began.Sub(start), hw.first.reasoning)
+			call.FirstReasoning = sinceStart(began.Sub(start), hw.first.think)
 		}
 		// A try that fails from here and hands the request on, to another
 		// account or member or the same one again, is in the ledger with
