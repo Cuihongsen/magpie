@@ -165,6 +165,15 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4470 合并
+
+2026-11-18 合并官方 `v0.1.4470`：15 个提交、75 个文件（+5,308/−133）。
+重点包括 `ccswitch://` 链接正确交给 CC Switch、Qwen Token Plan 的
+TTS/ASR/视频模型走 OpenAI 兼容端点、OpenCode 自动发现 Magpie 模型、
+工具搜索无匹配时明确提示、系统消息定位、Codex 模型列表与压缩处理，
+以及代码仓库/Skill 卡片统计等。合并无冲突，本地重试、冷却、时间窗
+和 fork 签名更新配置保持不变。
+
 ## 官方 v0.1.4456 合并
 
 2026-11-18 合并官方 `v0.1.4456`（当时 latest；`v0.1.4457` 只有 tag，
