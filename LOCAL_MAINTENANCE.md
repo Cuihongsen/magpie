@@ -165,6 +165,16 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4570 合并
+
+2026-11-20 合并官方 `v0.1.4570`：13 个提交、51 个文件（+2,595/−88）。
+重点包括：DeepSeek Harness 通过其 Claude Code hooks 插件收到 hooks；Codex
+插件清单按 Claude Code 方式读取并把 hooks 交给 Codex；路由阶段的账号席位
+展示其所有窗口；会话重启不再重新打开每个 Claude Code 子代理文件；usage
+对无 5 小时窗口的 Claude 账号显示为空；以及官方重建 docs 搜索索引
+（routing-groups 页面变更后）。合并无冲突，本地重试、冷却、时间窗和 fork
+签名更新配置保持不变。
+
 ## 官方 v0.1.4560 合并
 
 2026-11-20 合并官方 `v0.1.4560`：18 个提交、104 个文件（+5,868/−266，含
