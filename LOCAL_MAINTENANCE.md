@@ -165,6 +165,17 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4517 合并
+
+2026-11-19 合并官方 `v0.1.4517`：11 个提交、87 个文件（+4,796/−115）。
+重点包括 Codex 工具 `strict` schema 处理（OpenAI/Responses 兼容，修复
+LobeHub 一类客户端报 "oneOf constraints are not supported"）；Codex
+会话前缀逐请求一致的回归测试；路由组 Ultrafast 档位显示与路由 trace
+区分；服务端 SIGTERM 优雅排空在途请求（K8s 滚动更新）；GUI Usage
+卡片稳定与暗色 4.5:1 对比度；库 Rules 文件夹与子代理 Markdown 文件；
+以及 Pi 市场按 npmmirror 名检索。合并无冲突，本地重试、冷却、时间窗
+和 fork 签名更新配置保持不变。
+
 ## 官方 v0.1.4508 合并
 
 2026-11-19 合并官方 `v0.1.4508`：5 个提交、49 个文件（+1,413/−131）。
