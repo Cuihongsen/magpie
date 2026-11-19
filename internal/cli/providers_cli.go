@@ -684,7 +684,9 @@ func providerCmd(args []string) error {
 			}
 		}
 		if !ok {
-			os.Exit(1)
+			// through Main's exit, which ends the plugin host the test
+			// started (#7146)
+			return exitError{code: 1}
 		}
 		return nil
 	case "account-models", "account-model":
