@@ -165,6 +165,19 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4530 合并
+
+2026-11-19 合并官方 `v0.1.4530`：16 个提交、87 个文件（+3,979/−246）。
+重点包括 Codex 的 Ultra 档位按 GPT Sol/Astra/Terra 家族及 6.2 模型提供；
+remote magpie 按远端最擅长的 API 询问模型；Gemini CLI 登录不再带 Claude
+Code 的计费行、Gemini 缓存能读到前缀；Kubernetes 滚动更新时两个 Pod
+共用同一卷安全；路由组试用额度账号排在仍有套餐额度的账号之后；usage
+与路由保留并显示请求实际发出的模型 id；以及 Settings 搜索与 ⌘K、厂商
+休息密钥行文案等界面改进。唯一冲突在 `internal/gateway/gateway.go` 变量
+声明块：保留官方新增的 `wentAs`，同时保留本地疯狂重试的 `crazyRetries`/
+`crazyStopped`/`unavailableRetries`。本地重试、冷却、时间窗和 fork 签名
+更新配置保持不变。
+
 ## 官方 v0.1.4517 合并
 
 2026-11-19 合并官方 `v0.1.4517`：11 个提交、87 个文件（+4,796/−115）。
