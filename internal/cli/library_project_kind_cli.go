@@ -25,7 +25,7 @@ type projectKind struct {
 }
 
 var projectServers = projectKind{
-	word: "server", plural: "servers", reads: "MCP servers", takes: "mcp",
+	word: "server", plural: "servers", reads: "MCP servers", takes: "mcp", problem: "mcp:",
 	folder: func(a library.AgentView) string { return a.ProjectMCP },
 	of:     func(p *library.ProjectView) map[string][]string { return p.Servers },
 	set: func(dir string, names, agents []string) (*library.Result, error) {
@@ -42,10 +42,17 @@ var projectServers = projectKind{
 }
 
 var projectSubagents = projectKind{
-	word: "subagent", plural: "subagents", reads: "subagents", takes: "mcp",
+	word: "subagent", plural: "subagents", reads: "subagents", takes: "mcp", problem: "subagent:",
 	folder: func(a library.AgentView) string { return a.ProjectSubagents },
 	of:     func(p *library.ProjectView) map[string][]string { return p.Subagents },
 	set:    library.ProjectSubagents,
+}
+
+var projectHooks = projectKind{
+	word: "hook", plural: "hooks", reads: "hooks", problem: "hook:",
+	folder: func(a library.AgentView) string { return a.ProjectHooks },
+	of:     func(p *library.ProjectView) map[string][]string { return p.Hooks },
+	set:    library.ProjectHooks,
 }
 
 // agentsOf is a comma list of agents, none for no agent, each refused when
@@ -194,7 +201,7 @@ func projectKindCmd(k projectKind, rest []string, usage func() error) error {
 	}
 	var bad []string
 	for _, n := range names {
-		key := k.word + ":" + n
+		key := k.problem + n
 		if why := p.Problems[key]; why != "" {
 			bad = append(bad, n)
 			fmt.Println(amber.Render("!"), n, muted.Render("not placed:"), why)
@@ -223,7 +230,7 @@ func (k projectKind) list(typed string, asJSON bool) error {
 	}
 	have := k.of(p)
 	if asJSON {
-		return printJSON(map[string]any{"dir": p.Dir, "name": p.Name, k.plural: have})
+		return printJSON(map[string]any{"dir": p.Dir, "name": p.Name, k.plural: have, "items": k.items(p)})
 	}
 	names := make([]string, 0, len(have))
 	for n := range have {
@@ -237,7 +244,44 @@ func (k projectKind) list(typed string, asJSON bool) error {
 	for _, n := range names {
 		fmt.Printf("  %s → %s\n", bold.Render(n), strings.Join(have[n], ", "))
 	}
+	if own := p.Own[k.plural]; len(own) > 0 {
+		fmt.Println(" ", muted.Render("the project's own, read-only:"))
+		for _, r := range own {
+			fmt.Printf("  %s %s\n", r.Name, muted.Render(strings.TrimSpace(r.Event+" "+r.Path)))
+		}
+	}
 	return nil
+}
+
+// projectItem is one row of a project's list, with where it comes from:
+// source "magpie" for what magpie placed (agents says for whom), "project"
+// for what the project's own files give (read-only, #7247).
+type projectItem struct {
+	Name        string   `json:"name"`
+	Source      string   `json:"source"`
+	Agents      []string `json:"agents,omitempty"`
+	Agent       string   `json:"agent,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Event       string   `json:"event,omitempty"`
+	Transport   string   `json:"transport,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+func (k projectKind) items(p *library.ProjectView) []projectItem {
+	have := k.of(p)
+	names := make([]string, 0, len(have))
+	for n := range have {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := []projectItem{}
+	for _, n := range names {
+		out = append(out, projectItem{Name: n, Source: "magpie", Agents: have[n]})
+	}
+	for _, r := range p.Own[k.plural] {
+		out = append(out, projectItem{Name: r.Name, Source: "project", Agent: r.Agent, Path: r.Path, Event: r.Event, Transport: r.Transport, Description: r.Description})
+	}
+	return out
 }
 
 var _ = os.Stdout
