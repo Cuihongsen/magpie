@@ -165,6 +165,17 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4544 合并
+
+2026-11-19 合并官方 `v0.1.4544`：18 个提交、96 个文件（+3,521/−154，含
+此前未合入的 `v0.1.4539`）。重点包括：内联图片按厂商规则和尺寸计入上下文
+映射；一个此前用过的 Azure 密钥 401 后按“暂停”休息并后台探活；路由新增
+`fit`（Small 上下文优先，选能容纳请求的最小窗口）；netproxy 在系统回环
+代理未运行时 Auto 直连；Windows “actively refused” 视为拒绝连接；usage
+对 Claude Enterprise、ZCode、替身读取的诊断；以及库/MCP、Antigravity 定价
+和 Factory mover 版本等。合并无冲突，本地重试、冷却、时间窗和 fork 签名
+更新配置保持不变。
+
 ## 官方 v0.1.4530 合并
 
 2026-11-19 合并官方 `v0.1.4530`：16 个提交、87 个文件（+3,979/−246）。
