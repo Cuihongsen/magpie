@@ -165,6 +165,17 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4560 合并
+
+2026-11-20 合并官方 `v0.1.4560`：18 个提交、104 个文件（+5,868/−266，含
+此前未合入的 `v0.1.4559` 与 `v0.1.4559..v0.1.4560` 的库功能提交）。
+重点包括网关把 hub 的 Antigravity/agy 工具整包下发（而非 find_tools/call_tool）；
+另一台 magpie 的 ChatGPT 模型被 Codex 视作自身条目、remote magpie 把条目
+交给 Codex；路由默认名改为 Quota first 并对无规则分组的说明；Pi 市场按名
+安装包/仓库；Claude TUI 按选项行识别对话框；会话删除/恢复与搜索索引；以及
+`magpie library project` 的 server/subagent 增删改。合并无冲突，本地重试、
+冷却、时间窗和 fork 签名更新配置保持不变。
+
 ## 官方 v0.1.4544 合并
 
 2026-11-19 合并官方 `v0.1.4544`：18 个提交、96 个文件（+3,521/−154，含
