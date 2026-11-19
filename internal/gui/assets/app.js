@@ -12470,7 +12470,7 @@ const drawRotFig = (b, on, a) => (b.hidden = !on) ? b.replaceChildren() : (drawR
 // the routings besides Smart are the built-in plugin rotation's
 // (plugins/rotation): off, their options leave the page (data-feature),
 // and Smart is left — one in use keeps it on
-const ROTATION = new Set(["order", "drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring"]);
+const ROTATION = new Set(["order", "drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring", "fit"]);
 // jsRoutings: the routings JS gateway plugins serve now ("<plugin>/<name>",
 // settings' jsRoutings, plugins/middleware's), and saved, a routing none
 // serves now, shown as it is: its pool is tried in its listed order
@@ -15517,7 +15517,7 @@ const accountRestLines = (p, user) => {
 };
 
 // a key's rest, worded as the Routing page words a failure
-const KEY_FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", verify: "needs verification", refused: "refused (safety filter)", proxy: "proxy not reachable", slow: "slow to start" };
+const KEY_FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", verify: "needs verification", refused: "refused (safety filter)", proxy: "proxy not reachable", slow: "slow to start", suspended: "suspended by the vendor" };
 // Rest.Rate: the vendor called it a rate limit
 const keyFail = (r) => r.why === "quota" && r.rate ? KEY_FAIL.rate : KEY_FAIL[r.why] || "failed";
 
@@ -17975,7 +17975,8 @@ function panelBalances(bals) {
 // from a failed read (such as the vendor rate limiting its usage endpoint).
 function asOfText(q, short = false) {
   const text = short ? t("As of {when}", { when: stamp(q.asOf) })
-    : t(q.readDeferred ? "As of {when} — not refreshed this time" : "As of {when} — couldn't be read just now", { when: new Date(q.asOf).toLocaleString(intlLang()) });
+    : t(q.readDeferred ? "As of {when} — not refreshed this time" : "As of {when} — couldn't be read just now", { when: new Date(q.asOf).toLocaleString(intlLang()) })
+      + (!q.readDeferred && q.readError ? " · " + q.readError : "");
   return q.windows?.some((w) => w.resetsAt && new Date(w.resetsAt).getTime() <= Date.now())
     ? text + " · " + t("A cached window has expired; current allowance is unknown") : text;
 }
@@ -20938,6 +20939,7 @@ function renderProxy(s, keep) {
     system: t("Following the system proxy, {proxy}", { proxy: proxyDisplay(s.proxyNow) }),
     environment: t("Following HTTPS_PROXY, {proxy}", { proxy: proxyDisplay(s.proxyNow) }),
     off: t("Off: requests to vendors without a proxy of their own, and update checks, go direct"),
+    down: t("Nothing answers at the proxy found, {proxy}; requests go direct until it runs again", { proxy: proxyDisplay(s.proxyNow) }),
     none: t("No system proxy found; requests to vendors without a proxy of their own, and update checks, go direct"),
   }[s.proxySource] || "";
   const row = proxyRow(s, keep, {
