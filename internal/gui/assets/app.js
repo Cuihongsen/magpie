@@ -11164,7 +11164,7 @@ function renderEndpoints(p, src) {
   }
   if (p) {
     const test = testButton(p, t("Test"), t("Send a tiny request through each endpoint"), async () => {
-      for (const s of Object.values(slots)) { s.className = "res wait"; s.textContent = "…"; }
+      for (const s of Object.values(slots)) { s.className = "res wait"; s.textContent = "…"; if (s.nextElementSibling?.classList.contains("copy")) s.nextElementSibling.remove(); }
       try {
         const r = await provTest(p.id, asTyped());
         for (const x of r.results) {
@@ -11176,6 +11176,10 @@ function renderEndpoints(p, src) {
           const result = x.ok ? ledTook(x.ms) : x.status ? `${x.status} · ${x.error}` : x.error;
           s.append(el("span", "", x.account ? t("Tested {user}: {result}", { user: x.account, result }) : result));
           s.title = x.ok ? t("model {model}", { model: x.model }) : x.error;
+          // a failed test's words can be copied whole, to hand to an agent
+          // (imwritingbugs on X)
+          s.nextElementSibling?.classList.contains("copy") && s.nextElementSibling.remove();
+          if (!x.ok) s.after(copyBtn(x.status ? `${x.status} · ${x.error}` : x.error, t("Error")));
         }
       } catch (e) { for (const s of Object.values(slots)) { s.className = "res"; s.textContent = ""; } testErr(e); }
     });
@@ -11302,6 +11306,7 @@ function detectAPIs(p, base, use) {
       res.append(el("span", "", x.ok ? ledTook(x.ms) : why));
       res.title = (x.model ? t("model {model}", { model: x.model }) : "") + (x.ok ? "" : "\n" + why);
       e.append(pl, el("code", "", x.base || "—"), res);
+      if (!x.ok) e.append(copyBtn(why, t("Error")));
       out.append(e);
     }
   };
@@ -12450,7 +12455,7 @@ function kindTag(c, kind) {
 // renderRouting: spread over keys or accounts and stickiness, staged in
 // the draft and made with Save (01huadalang on Discord)
 const ROUTINGS = [
-  ["", "Smart", "Not load balancing: every request, new conversations too, goes to the one account whose quota renews soonest, since what it has left is lost then, until it runs low or can't answer. Keys go in their order. To spread requests evenly, pick In turn or Least used first. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
+  ["", "Quota first", "Not load balancing: every request, new conversations too, goes to the one account whose quota renews soonest, since what it has left is lost then, until it runs low or can't answer. Keys go in their order. To spread requests evenly, pick In turn or Least used first. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
   ["order", "In order", "Requests go to the first; the next takes over when the one before runs out of quota, hits a rate limit or fails."],
   // dzxx0496 on Discord: free accounts one after another, the first not
   // taking the requests back once it renews (routes.Drain)
@@ -22159,13 +22164,14 @@ function privacyModelRow(box, why) {
       sr.replaceChildren(sw, sv);
       if (!sr.isConnected) r.after(sr);
     } else sr.remove();
+    import("./pmfolder.js").then(() => window.pmFolder(r, sr, m, act), () => {});
     clearTimeout(pmTimer);
     // a download's progress, and where pf-serve runs once it has started
     const starting = m?.on && m.installed && !m.running && !m.failed && tries++ < 30;
-    if (pmBusy(m) || starting) pmTimer = setTimeout(load, 1000);
+    if (pmBusy(m) || starting || m?.moving) pmTimer = setTimeout(load, 1000);
   };
   const load = () => api("privacy-model").then((m) => { pmState = m; draw(m); }).catch(() => {});
-  const act = (doing, model, score) => { tries = 0; api("privacy-model", { do: doing, model, score }).then((m) => { pmState = m; draw(m); }).catch((e) => { statusTErr(e); load(); }); };
+  const act = (doing, model, score, dir) => { tries = 0; api("privacy-model", { do: doing, model, score, dir }).then((m) => { pmState = m; draw(m); }).catch((e) => { statusTErr(e); load(); }); };
   draw(pmState);
   load();
 }
