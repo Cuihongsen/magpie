@@ -165,6 +165,18 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4578 合并
+
+2026-11-20 合并官方 `v0.1.4578`：8 个提交、54 个文件（+2,457/−60）。
+重点包括网关 `/v1/responses/compact` 受密钥 MaxConcurrency 约束、拒绝
+只读密钥，并中继到本身用 Responses API 的供应商；relay 密钥按 sub2api
+分组费率乘供应商加价率计费；插件账号模型列表回退后仍服务全部模型；
+Settings 重启后空白会说明并重读；Docker 镜像改用 Debian 13 以启动 glibc
+2.38 的 npm 包。差异：`internal/gui/assets/app.js` 在 `advancedSet` 中保留
+官方 `topUpRate` 与本地 `errorCooldownSeconds`；`internal/gui/providers.go`
+保留本地 `CrazyRetry`/`ErrorCooldownSeconds` 并加入官方 `TopUpRate`/
+`KeyGroupRates`。本地重试、冷却、时间窗和 fork 签名配置保持不变。
+
 ## 官方 v0.1.4570 合并
 
 2026-11-20 合并官方 `v0.1.4570`：13 个提交、51 个文件（+2,595/−88）。
