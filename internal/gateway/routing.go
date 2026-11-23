@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/egress"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/routes"
@@ -230,6 +231,7 @@ func clearRest(key string) {
 	if kept {
 		saveRests() // its rung starts over after a restart too
 	}
+	clearNotice(key) // it answered: its limit is over
 }
 
 // How long a candidate sits out, by why it failed.
@@ -569,13 +571,14 @@ func carriedStatus(status int, body []byte) int {
 // failure says why a reply failed.
 func failure(status int, body []byte) string {
 	status = carriedStatus(status, body)
-	if status == http.StatusBadGateway && (proxyDown.Match(body) || bodyHas(body, closedUnsentWords) || bodyHas(body, stalledWords)) {
+	if status == http.StatusBadGateway && (proxyDown.Match(body) || bodyHas(body, closedUnsentWords) || bodyHas(body, stalledWords) || bodyHas(body, egress.HeldWords)) {
 		// the proxy didn't take the connection, or the network closed
 		// each new one before the request was sent (errClosedUnsent):
 		// nothing reached the vendor, and the account is as good as it
 		// was. Read as the account's failure, it rested ChatGPT accounts
 		// whose window was full till the window renewed, days off,
-		// shown as "502 · 失败" (dealyang_ on X)
+		// shown as "502 · 失败" (dealyang_ on X). A Claude request magpie
+		// held for its way out's region (egress.Hold) never left either
 		return failProxy
 	}
 	if _, ok := provider.Verification(body); ok && (status == 401 || status == 403) {
@@ -964,6 +967,7 @@ func restarted(agent, user string) {
 // full: those no vendor timed by renewed's word alone, and those it did
 // only by restarted's.
 func liftRests(agent, user string, vendorTill bool) {
+	defer saveDropped() // after the lock is let go
 	restingUntil.Lock()
 	defer restingUntil.Unlock()
 	now := time.Now()
@@ -1035,6 +1039,7 @@ func creditsKnown(agent, user string) {
 		liftedLocked(k, now)
 	}
 	restingUntil.Unlock()
+	saveDropped()
 	codexHolds.Lock()
 	if h, ok := codexHolds.m[strings.ToLower(user)]; ok && h.why == failQuota {
 		delete(codexHolds.m, strings.ToLower(user))
@@ -1145,6 +1150,7 @@ func (s *Server) Unrest(key string) bool {
 	delete(restingUntil.note, key)
 	liftedLocked(key, time.Now())
 	restingUntil.Unlock()
+	saveDropped()
 	if kept {
 		saveRests()
 	}
@@ -1171,6 +1177,13 @@ func (s *Server) UnrestAll(key string) int {
 	}
 	liftedLocked(key, now)
 	restingUntil.Unlock()
+	// and the notices of its models whose rests ended already
+	for _, n := range LimitNoticesUnder(key + "/") {
+		if dropNotice(n.Key) {
+			noticesDropped.Store(true)
+		}
+	}
+	saveDropped()
 	if kept {
 		saveRests()
 	}
@@ -1989,6 +2002,8 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	if r.Probed {
 		s.probeLater(c.p, r, now)
 	}
+	// shown on its row till the limit is over, past its rest
+	noteLimit(r, header, body, now)
 	if unread && id == c.restKey() && id != c.restID() {
 		narrowing.Add(1)
 		go narrowWhenRead(c, r)
@@ -2551,6 +2566,12 @@ func resetsNoted(h http.Header, now time.Time) time.Duration {
 // retryAfter is when a vendor says to try again: Retry-After, in seconds
 // or as a date, or the reset headers of OpenAI's and Anthropic's kind.
 func retryAfter(h http.Header, now time.Time) time.Duration {
+	return min(retryAfterSaid(h, now), longestWait)
+}
+
+// retryAfterSaid is retryAfter as the vendor said it, not held to the
+// longest wait: the time a limit's notice is shown till (limitEnd).
+func retryAfterSaid(h http.Header, now time.Time) time.Duration {
 	var d time.Duration
 	if v := h.Get("Retry-After"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil {
@@ -2576,7 +2597,7 @@ func retryAfter(h http.Header, now time.Time) time.Duration {
 	if d <= 0 {
 		return 0
 	}
-	return min(d, longestWait)
+	return d
 }
 
 var allowances = provider.Allowances
@@ -2833,7 +2854,8 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		}
 		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
 			Used: l.used, WeekLow: l.weekLow, Soon: l.soon, Unreached: l.unreached, Lapse: l.lapse, Lapsing: l.lapsing, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits, First: l.first,
-			Left: l.bal, LeftIn: l.balIn, Spent: spentRest(c), Lead: c.p.UseFirst}
+			Trial: l.credits && c.p.Account != nil && strings.HasPrefix(c.p.Account.UsageAgent(), "plugin:"),
+			Left:  l.bal, LeftIn: l.balIn, Spent: spentRest(c), Lead: c.p.UseFirst}
 	}
 	routed.Unlock()
 	if st.ByUse {

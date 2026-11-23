@@ -1067,6 +1067,12 @@ func pluginProbeFor(input string) (*PluginProbe, func(), error) {
 			}
 		}
 	}
+	return fetchPluginProbe(input)
+}
+
+// fetchPluginProbe is the probe of input from a new download, never the
+// one a probe kept; cleanup removes it.
+func fetchPluginProbe(input string) (*PluginProbe, func(), error) {
 	root, tmp, err := resolvePluginRoot(input)
 	if err != nil {
 		return nil, nil, err
@@ -1093,7 +1099,11 @@ func installPlugins(p *PluginProbe, input string, names, agents []string, as str
 	case len(names) == 0 && len(p.Candidates) == 1:
 		picked = p.Candidates
 	case len(names) == 0:
-		return nil, fmt.Errorf("%s lists %d plugins: pick the ones to install", p.Marketplace, len(p.Candidates))
+		var all []string
+		for _, c := range p.Candidates {
+			all = append(all, c.Name)
+		}
+		return nil, fmt.Errorf("%s lists %d plugins (%s): pick the ones to install", p.Marketplace, len(p.Candidates), strings.Join(all, ", "))
 	default:
 		for _, n := range names {
 			i := slices.IndexFunc(p.Candidates, func(c PluginCandidate) bool { return c.Name == n })
@@ -1430,7 +1440,11 @@ func UpdatePlugin(name string) (*Result, error) {
 	if b.Pick != "" {
 		names = []string{b.Pick}
 	}
-	p, cleanup, err := pluginProbeFor(b.Source)
+	// an update fetches the source again, never the download a probe of it
+	// kept: one looked up before a new commit was pushed is that commit's,
+	// and the update said it was done while the plugin stayed as it was
+	// until magpie restarted (jinpwng on X, a Pi package from git)
+	p, cleanup, err := fetchPluginProbe(b.Source)
 	if err != nil {
 		return nil, err
 	}

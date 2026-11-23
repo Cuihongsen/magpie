@@ -3,11 +3,13 @@ package gui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,12 +49,14 @@ type subagentModel struct {
 	Name  string `json:"name"`
 	Note  string `json:"note,omitempty"`
 	Group bool   `json:"group,omitempty"`
+	// Efforts are the efforts Codex runs it at, when the catalog knows
+	Efforts []string `json:"efforts,omitempty"`
 }
 
 func subagentModels() []subagentModel {
 	out := []subagentModel{}
 	for _, e := range provider.CodexSubagentModels() {
-		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != ""}
+		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != "", Efforts: e.Efforts}
 		if a := e.Provider.Account; a != nil && a.User != "" {
 			m.Note = a.User
 		}
@@ -62,6 +66,30 @@ func subagentModels() []subagentModel {
 		out = append(out, m)
 	}
 	return out
+}
+
+// codexSubagentEffort refuses an effort the model a Codex subagent runs
+// on lacks, its own or the one the Agents page puts Codex's subagents on:
+// Codex refuses to start a subagent at one (the Agents page's subagent
+// effort is held to the same). With neither, the lead picks the model,
+// and any effort goes.
+func codexSubagentEffort(s library.Subagent) error {
+	if s.Effort == "" || !slices.ContainsFunc(s.Agents, func(a string) bool { return a == "codex" || strings.HasPrefix(a, "codex@") }) {
+		return nil
+	}
+	m := strings.TrimSpace(s.Model)
+	if m == "" {
+		m = provider.CodexSubagentModel()
+	}
+	if m == "" {
+		return nil
+	}
+	for _, e := range subagentModels() {
+		if e.ID == m && len(e.Efforts) > 0 && !slices.Contains(e.Efforts, strings.ToLower(strings.TrimSpace(s.Effort))) {
+			return fmt.Errorf("Codex runs %s at %s, not %s: it would refuse to start this subagent", e.Name, strings.Join(e.Efforts, ", "), s.Effort)
+		}
+	}
+	return nil
 }
 
 func libraryView(res *library.Result) (libraryJSON, error) { return libraryRead(res, false) }
@@ -164,6 +192,9 @@ func revealable(v *library.View) []string {
 	for _, s := range v.FoundSkills {
 		out = append(out, s.Link, s.Shared)
 	}
+	for _, h := range v.FoundHooks {
+		out = append(out, h.File)
+	}
 	for _, s := range v.Subagents {
 		// the file it is kept in, to edit it in
 		if s.Path != "" {
@@ -230,6 +261,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		m := marketOf(list, err)
 		m.Direct = library.PiDirectAt(q, list)
 		writeJSON(rw, m)
+	})
+	mux.HandleFunc("GET /api/library/market/claude", func(rw http.ResponseWriter, r *http.Request) {
+		list, err := library.MarketClaudePlugins(r.URL.Query().Get("q"))
+		writeJSON(rw, marketOf(list, err))
 	})
 	mux.HandleFunc("POST /api/library/market/about", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ IDs []string }
@@ -307,13 +342,16 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		writeJSON(rw, p)
 	})
 	// which skills GitHub has changed: the page as it is, each skill from
-	// there carrying what the check found of it
+	// there carrying what the check found of it. With Update by themselves
+	// on, the ones changed there are updated too, and the result says so
+	// (skill_autoupdate.go)
 	mux.HandleFunc("POST /api/library/skills/check", func(rw http.ResponseWriter, r *http.Request) {
-		if _, err := library.CheckSkills(); err != nil {
+		_, up, err := library.CheckSkillsUpdating()
+		if err != nil {
 			fail(rw, err)
 			return
 		}
-		v, err := libraryView(nil)
+		v, err := libraryView(up)
 		if err != nil {
 			fail(rw, err)
 			return
@@ -751,6 +789,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// Replace updates a skill changed here all the same, its
 			// changed version kept with the backups (#1449)
 			Replace bool
+			// NoBackup deletes a skill's folder on skills/remove… rather
+			// than moving it to the backups, as the reader picked
+			NoBackup bool `json:"noBackup"`
 			// a skill's file saved: its place in the skill, its new text,
 			// and what it held when the page opened it
 			File, Text, Was string
@@ -783,6 +824,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "servers/hub-tools":
 			// every tool given whole, not on demand (settings.RouterAllTools)
 			err = settings.SetRouterAllTools(in.On)
+		case "servers/hub-code":
+			// the router's run_code (settings.RouterNoCode)
+			err = settings.SetRouterNoCode(!in.On)
 		case "servers/hub-open":
 			// the hub added to another app through its install link,
 			// built here: the page names the app, never the link
@@ -830,6 +874,13 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.RemoveHooks([]string{in.Name})
 		case "hooks/remove-all":
 			res, err = library.RemoveHooks(in.Names)
+		case "hooks/import":
+			// hooks the agents run that magpie didn't give them, by
+			// their keys (@InkCoalW on X)
+			res, err = library.ImportHooks(in.Names)
+		case "hooks/remove-found":
+			// out of the agents' own files, each copied to the backups first
+			res, err = library.RemoveFoundHooks(in.Names)
 		case "plugins/install":
 			res, err = library.InstallPlugins(in.Source, in.Names, in.Agents)
 		case "plugins/agents":
@@ -841,7 +892,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "plugins/remove":
 			res, err = library.RemovePlugin(in.Name)
 		case "subagents/save":
-			res, err = library.SaveSubagent(in.Old, in.Subagent)
+			if err = codexSubagentEffort(in.Subagent); err == nil {
+				res, err = library.SaveSubagent(in.Old, in.Subagent)
+			}
 		case "subagents/agents":
 			res, err = library.SubagentAgentsSet(in.Name, in.Agents)
 		case "subagents/remove":
@@ -874,7 +927,7 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 				res, err = &library.Result{Changed: []string{}, Problems: []library.Problem{}, Gone: []string{gone.Name}}, nil
 			}
 		case "skills/remove-gone":
-			res, err = library.RemoveGoneSkills(in.Names)
+			res, err = library.RemoveGoneSkillsHow(in.Names, !in.NoBackup)
 		case "skills/update-all":
 			res, err = library.UpdateSkills()
 		case "skills/update-some":
@@ -894,9 +947,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "skills/agents-some":
 			res, err = library.SomeSkillsAgents(in.Names, in.Agents, in.On)
 		case "skills/remove":
-			res, err = library.RemoveSkill(in.Name)
+			res, err = library.RemoveSkillsHow([]string{in.Name}, !in.NoBackup)
 		case "skills/remove-all":
-			res, err = library.RemoveSkills(in.Names)
+			res, err = library.RemoveSkillsHow(in.Names, !in.NoBackup)
 		case "skills/group":
 			res, err = library.GroupSkills(in.Old, in.Name, in.Names)
 		case "skills/ungroup":
@@ -910,9 +963,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "skills/import-all":
 			res, err = library.ImportSkills(in.Names)
 		case "skills/remove-found":
-			res, err = library.RemoveFoundSkill(in.Name)
+			res, err = library.RemoveFoundSkillsHow([]string{in.Name}, !in.NoBackup)
 		case "skills/remove-found-some":
-			res, err = library.RemoveFoundSkills(in.Names)
+			res, err = library.RemoveFoundSkillsHow(in.Names, !in.NoBackup)
 		case "skills/hand-over":
 			// out of ~/.agents/skills, into the library's own folder (tnt1223)
 			res, err = library.HandOverSkills(oneOrMore(in.Name, in.Names))
