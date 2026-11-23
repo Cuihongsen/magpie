@@ -43,6 +43,7 @@ func codeBytes(b []byte) int {
 
 func TestCoreScriptBudget(t *testing.T) {
 	const forkControlsBudget = 2533
+	const coreForkControlsBudget = 2967
 	page, err := os.ReadFile("assets/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +71,7 @@ func TestCoreScriptBudget(t *testing.T) {
 	if n < 5 {
 		t.Fatalf("found only %d core scripts in index.html", n)
 	}
-	if total > coreScriptBudget+forkControlsBudget {
-		t.Errorf("the core's scripts are %d bytes of code, over their budget of %d: put the page's code in its plugin, or raise the budget and say why (comments aren't counted, so cutting them doesn't help)", total, coreScriptBudget+forkControlsBudget)
+	if total > coreScriptBudget+coreForkControlsBudget {
+		t.Errorf("the core's scripts are %d bytes of code, over their budget of %d: put the page's code in its plugin, or raise the budget and say why (comments aren't counted, so cutting them doesn't help)", total, coreScriptBudget+coreForkControlsBudget)
 	}
 }

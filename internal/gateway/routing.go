@@ -1576,6 +1576,12 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// was, and is asked again once the network is back (offline.go)
 		return Rest{Why: failOffline, Status: status, By: "off", Until: now}
 	}
+	if lanUnreached(c, status, body) {
+		// a Remote magpie on a network this computer isn't on now: it
+		// is passed over while it can't be reached, and asked again the
+		// moment it can (lan_reach.go)
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if regionRefused(status, wordsOf(body)) {
 		// the vendor refused where the request came from (regionWords):
 		// the network's doing, and the edge's the connection reached, not
@@ -1997,6 +2003,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// Claude Code onto an account the gateway had set aside. A rest
 		// of one model (Fable's own limit) leaves the account in
 		provider.NoteClaudeOut(a.User, standing, r.said, r.By == "resets" || r.By == "window" || r.By == "retry-after")
+	} else if a != nil && a.UsageAgent() == "claude" && why == failQuota && id == c.restID() {
+		// and rested for its model's family alone (Anthropic's "You've
+		// hit your Fable limit"), it is out for that family alone: the
+		// switch still takes it as a spare for Claude Code on Opus
+		provider.NoteClaudeModelOut(a.User, c.model, standing, r.said, r.By == "resets" || r.By == "window" || r.By == "retry-after")
 	}
 	if id == c.restKey() && (why == failQuota || why == failCredit) {
 		// a pool routed Until used up goes on from it, though it renews
@@ -2354,7 +2365,17 @@ func (c candidate) full(now time.Time) time.Time {
 	if spendsCredits(c.p, a) || c.p.Account == nil && a.OnCredits() {
 		return time.Time{}
 	}
-	return a.Full(c.model, provider.SpentShareOf(c.p.Routing), now)
+	full := a.Full(c.model, provider.SpentShareOf(c.p.Routing), now)
+	// a Claude account Claude Code said is out for the model's family
+	// alone ("You've hit your Fable limit", claude-limits.json: from the
+	// warm-up, a /usage run or a refusal it wrote) is full for that
+	// family's models till the reset it named, and not for the others
+	if acct := c.p.Account; acct != nil && acct.UsageAgent() == "claude" {
+		if t := provider.ClaudeModelOutUntil(acct.User, c.model, now); t.After(full) {
+			full = t
+		}
+	}
+	return full
 }
 
 // onCredits: c is a Codex account that goes on past its allowance on its
