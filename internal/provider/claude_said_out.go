@@ -46,16 +46,25 @@ var claudeSaidReset = lazyre.New(`(?i)\bresets\s+(.+?)\s*$`)
 // reset it names, read in a weekly window's span, or in a 5-hour one's
 // for the session limit; else claudeSaidUnknownFor from now.
 func claudeSaidUntil(s string, now time.Time) time.Time {
+	if t, ok := claudeSaidResetAt(s, now); ok {
+		return t
+	}
+	return now.Add(claudeSaidUnknownFor)
+}
+
+// claudeSaidResetAt is the reset s names, when it names one magpie can
+// read that is still to come.
+func claudeSaidResetAt(s string, now time.Time) (time.Time, bool) {
 	if m := claudeSaidReset.FindStringSubmatch(s); m != nil {
 		span := 7 * 24 * time.Hour
 		if lower := strings.ToLower(s); strings.Contains(lower, "session") || strings.Contains(lower, "5-hour") {
 			span = 5 * time.Hour
 		}
 		if t, ok := claudeResetTime(strings.TrimRight(strings.TrimSpace(m[1]), "."), now, span); ok && t.After(now) {
-			return t
+			return t, true
 		}
 	}
-	return now.Add(claudeSaidUnknownFor)
+	return time.Time{}, false
 }
 
 func readClaudeSaid() map[string]claudeSaid {
@@ -86,6 +95,17 @@ func noteClaudeSaid(user, s string, now time.Time) {
 	if !claudeLimitSaid.MatchString(said) {
 		return
 	}
+	keepClaudeOut(user, claudeSaidUntil(said, now), said, now)
+}
+
+// keepClaudeOut keeps the account user out till until, for said, Claude
+// Code's or Anthropic's words, in claude-limits.json. The latest word
+// stands: a refusal for the session limit after one for the week says the
+// week's is over.
+func keepClaudeOut(user string, until time.Time, said string, now time.Time) {
+	if user == "" || !until.After(now) {
+		return
+	}
 	claudeSaidMu.Lock()
 	defer claudeSaidMu.Unlock()
 	m := readClaudeSaid()
@@ -94,7 +114,7 @@ func noteClaudeSaid(user, s string, now time.Time) {
 			delete(m, k)
 		}
 	}
-	m[strings.ToLower(user)] = claudeSaid{Until: claudeSaidUntil(said, now), Said: clipLine(strings.TrimSpace(said))}
+	m[strings.ToLower(user)] = claudeSaid{Until: until, Said: clipLine(strings.TrimSpace(said))}
 	writeClaudeSaid(m)
 }
 
@@ -161,4 +181,29 @@ func staleSpare(q SubscriptionQuota, now time.Time) bool {
 		return claudeStale(q.Windows, *q.ReadAt, now)
 	}
 	return false
+}
+
+// NoteClaudeOut keeps the Claude account user out till until because the
+// gateway rested the whole account for its allowance (not one model's):
+// the bridge's Claude Code was refused, and the switch must not move Claude
+// Code onto an account the gateway won't ask either. named is whether
+// Anthropic said until (its resetsAt, a reset header, its words, the
+// window it reported full); a guess never shortens what is kept already.
+func NoteClaudeOut(user string, until time.Time, said string, named bool) {
+	now := time.Now()
+	if user == "" || !until.After(now) {
+		return
+	}
+	if strings.TrimSpace(said) == "" {
+		said = "Anthropic refused the account for its usage limit"
+	}
+	if !named {
+		claudeSaidMu.Lock()
+		s, ok := readClaudeSaid()[strings.ToLower(user)]
+		claudeSaidMu.Unlock()
+		if ok && !s.Until.Before(until) {
+			return
+		}
+	}
+	keepClaudeOut(user, until, said, now)
 }
