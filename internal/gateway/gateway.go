@@ -3794,12 +3794,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	promptRead := s.inspectPrompt(tr, from, body, body, sentWhole)
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
-	sent := ""       // the reasoning the last try's model was asked for
-	wentAt := ""     // and the level that went, once translated (wireEffort, #1636)
-	wentTier := ""   // the service tier the last try went out at (noteWireTier, #1784)
-	wentAs := ""     // the model id the last try went out under, when another than its model (wireName)
-	where := ""      // the last try's provider.Where, for the usage
-	again := 0       // times the last one left has been tried again
+	sent := ""     // the reasoning the last try's model was asked for
+	wentAt := ""   // and the level that went, once translated (wireEffort, #1636)
+	wentTier := "" // the service tier the last try went out at (noteWireTier, #1784)
+	wentAs := ""   // the model id the last try went out under, when another than its model (wireName)
+	where := ""    // the last try's provider.Where, for the usage
+	again := 0     // times the last one left has been tried again
 	crazyRetries := map[string]int{}
 	crazyStopped := map[string]Try{}
 	unavailableRetries := map[string]int{}
