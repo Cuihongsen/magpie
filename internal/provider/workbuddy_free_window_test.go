@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+func TestWorkBuddySpentCreditsLeaveFreeModel(t *testing.T) {
+	now := time.Now()
+	reset := now.Add(20 * time.Hour).UTC().Format(time.RFC3339)
+	usage := []byte(`{"plan":"Free plan","windows":[
+		{"name":"Credits","used":100,"amount":500,"limit":500,"unit":"credits","resetsAt":"` + reset + `","notModels":["hy4flash-free"]},
+		{"name":"Free model tokens","used":20,"amount":20,"limit":100,"unit":"tokens","resetsAt":"` + reset + `","models":["hy4flash-free"]}]}`)
+	allowance := PluginAllowanceForTest(usage, now)
+	if at := allowance.Full("paid-model", 100, now); at.IsZero() {
+		t.Error("spent credits should hold the paid model")
+	}
+	if at := allowance.Full("hy4flash-free", 100, now); !at.IsZero() {
+		t.Errorf("spent credits held the free model until %v", at)
+	}
+}
+
 // youjianqiasongshan on Discord: a WorkBuddy Free plan card of 积分 500 /
 // 500, Extra credits 3,406.7 / 3,750 and Free model tokens refused (0 left
 // of 200,000,000), asking why the other credits can't be used. The usage

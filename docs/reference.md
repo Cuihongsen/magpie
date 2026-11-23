@@ -141,13 +141,14 @@ line; agents connected to magpie lose it when it quits.
 | OpenClaw     | `openclaw.json` in `~/.openclaw` (`$OPENCLAW_CONFIG_PATH`, `$OPENCLAW_STATE_DIR`, `~/.openclaw-<profile>` for `$OPENCLAW_PROFILE`, `~` as `$OPENCLAW_HOME`) | model (a `magpie` provider in `models.providers`, `openai-completions`, with magpie's models in it; `agents.defaults.model`'s primary set to it, what was there put back on Disconnect; `magpie/*` added to a `modelPolicy.allow` that would refuse it; the user's own keys in the provider and its models kept; a chat already on a model keeps it until `/model default`) |
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | Dim (alpha, `dima`) | Dim's built-in **Magpie** provider, through Dim's own daemon (`$DIMCODE_HOME`, else `~/.dimcode-alpha`), and magpie's own `dim.json` beside its settings | model (Dim's Magpie provider gets the gateway's `/v1` and magpie's key, is turned on and made Dim's model, so a plain `dima` runs on magpie; no other provider is touched, and a key or address you set on the Magpie entry yourself is kept. Picking Dim's own again turns the entry off and puts back the model Dim was on. When Dim's daemon can't be reached, a `dima` function in your shell profiles starts it with `DIM_BASE_URL`, `DIM_API_KEY`, `DIM_MODEL` and the token limits for that run instead) |
-| Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting) |
+| Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting). Vibe Desktop (bundle `ai.mistral.lechat.desktop`; `le-chat-desktop\Vibe.exe` on Windows) runs the same app server on the same file, lists the agent with no CLI installed, and reads the file when a chat starts |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
 | Qoder (CLI)  | `~/.qoder/settings.json` (`$QODER_CONFIG_DIR`) | model, effort (a `magpie` custom provider; needs a Qoder plan with BYOK) |
 | Qoder CN (CLI) | `~/.qoder-cn/settings.json` (`$QODERCN_CONFIG_DIR`) | model, effort (as Qoder; its own accounts, a Qoder CN plan with BYOK) |
 | Grok Build   | `~/.grok/config.toml` (`$GROK_HOME`) | model, effort |
+| Kigi         | `~/.kigi/config.toml` (`$KIGI_SHARE_DIR`) | model, effort (Grok Build's tables; Kigi is its fork) |
 | Grok App     | `agent-home/config.toml` in its data folder (`$GROK_APP_HOME`, else `~/Library/Application Support/com.grokapp.grok-app`, `%APPDATA%\grokapp\grok-app\data`, `$XDG_DATA_HOME/grok-app`, or `~/.grok-app`) | model (a `[model.magpie]` custom provider under Accounts, with magpie's models and their effort levels in `app_models`; the route, `[models] default`, stays until the user presses Use on magpie there (one of the App's own routes picked in magpie is written as the route, and magpie's channel goes); a route an older magpie set to `magpie` is put back once; Disconnect drops the channel and puts the route back only if it is still `magpie`, else the one it was on before Connect if none is left; a model or default effort picked in the App kept; instructions, MCP and skills are the Library's Grok App row on agent-home; RTK has no hook for it or for Grok Build) |
 | ZCode        | `~/.zcode/v2/provider_config.json` and `config.json`, under the data folder moved in ZCode's settings (`dataBaseDir`); `~` is `$HOME` when set, on Windows too, as ZCode reads it before `%USERPROFILE%` | provider (magpie's models in ZCode's picker) |
 | WorkBuddy    | `~/.workbuddy/models.json` (`$WORKBUDDY_CONFIG_DIR`) | provider (magpie's models in WorkBuddy's picker) |
@@ -1600,7 +1601,11 @@ per middleware; `{skip: true}` passes the account over for that request),
 event of a streamed reply and `onResponse(body, ctx)` a whole one, all in
 the agent's own API. A hook returns the changed object, or nothing to
 leave it; `onEvent` returns `null` to drop an event, and
-`ctx.reject(status, message)` turns a request away. Declare it with
+`ctx.reject(status, message)` turns a request away. `ctx.caller` is
+the agent the request came from, `{agent, name, via}`, through any magpies
+that passed it on (as a plugin's `chat.headers` gets `input.caller`), so
+`onRequest` can refuse an agent before any provider is asked; the async
+request hooks get it too. Declare it with
 `"magpie": { "middleware": "./mw.js" }` in `package.json`, or add a single
 `*.middleware.js` file:
 
@@ -2827,6 +2832,18 @@ ASCII, so an account named in other letters (`北冥`) is sent percent-encoded
 (`X-Magpie-Account: %E5%8C%97%E5%86%A5`, JavaScript's `encodeURIComponent`);
 magpie decodes it, and a value that isn't such an encoding is the name as
 written.
+
+`GET /v1/magpie/accounts` lists the accounts and API keys of every
+provider, those whose vendor tells no quota included, by identifiers only:
+`provider`, `id` (a signed-in account's login id, a key's fingerprint,
+never the key), `kind` (`account` or `key`), `label`, `user`, `plan`, `on`
+and `pin`, `"<provider>/<id>"`. `?provider=<id>` lists one provider's.
+`X-Magpie-Account: <pin>` (or the id alone) pins a request to that
+account or key. It is asked as `/v1/magpie/quotas` is: this machine, or
+another with a key of a gateway shared on the local network; a read-only
+key may read it, and a key held to a budget, models or accounts only when
+its owner lets it be told quotas, and then only of the accounts it may
+use.
 
 A status bar can show where a turn went before its first token arrives:
 send `X-Magpie-Session: <id>` with the requests (an agent's own session
@@ -4717,11 +4734,14 @@ and models to look after first, by magpie's own ids only:
   fine-tune) is only `<provider>/other`; one on a provider of your own is
   only `custom`, a routing group only `group`;
 - how many of each, and how many routing groups you have.
-- for each partner (a sponsor listed first in the add sheet), by its id, how
-  many times a day the add sheet showed it, its row was opened, its key
-  page was opened and a provider was added from it (at most 20 of each,
-  5 adds), kept in `~/.cache/magpie/partner-counts.json` for at most 14
-  days and sent the day after as `magpie partner` events;
+- for each partner (a sponsor listed first in the add sheet, or in the
+  Plugins page's Discover), by its id, how many times a day it was shown,
+  its row was opened, its key page was opened and a provider was added
+  from it or its plugin installed (at most 20 of each, 5 adds), with where
+  it is listed (`slot`: `providers` or `plugins`), and how many times a
+  day the Plugins page was opened (at most 20), kept in
+  `~/.cache/magpie/partner-counts.json` for at most 14 days and sent the
+  day after as `magpie partner` and `magpie page` events;
 - to usemagpie.ai, not PostHog, which of the plugins Discover lists are
   installed and on (npm names, or `github:owner/repo` for a repository
   tagged `magpie-plugin`; never a folder, a private repository or an
@@ -4751,8 +4771,8 @@ Partners are also counted where usemagpie.ai sees them, whatever these
 settings say, as any website sees its visits. The partner list
 (`/api/partners`) gives each partner's website and key page as a
 `https://usemagpie.ai/go/<id>/site|keys[/<region>]` link, which sends a
-`magpie partner go` event (the partner, which link, the region, and the
-country Cloudflare gives) before sending the browser on; and one in ten
+`magpie partner go` event (the partner, which link, the region, where it
+is listed, and the country Cloudflare gives) before sending the browser on; and one in ten
 fetches of the list sends a `magpie partners fetch` event with weight 10
 and the country, while a partner is listed. Each event has an id of its
 own: no install id, address or account goes with it. The code is

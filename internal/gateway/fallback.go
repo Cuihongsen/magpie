@@ -699,7 +699,7 @@ func planFallbackGroup(g provider.Group, ms []provider.Member, from provider.Pro
 // too, within its own order (#2255), before g's Sink orders the whole.
 // A member's fallbacks are not the group's.
 func (s *Server) planGroup(g provider.Group, ms []provider.Member, from provider.Protocol) ([]candidate, planned) {
-	var pl planned
+	pl := planned{routing: g.Routing, grouped: true}
 	var asides []candidate
 	var wAsides []Weighed
 	out := planLevel(g, ms, 0, from, &pl, &asides, &wAsides, nil)
@@ -1640,6 +1640,11 @@ func liftedLocked(key string, now time.Time) {
 		}
 	}
 	restingUntil.lifted[key] = now
+	// the limit it was shown for is over too (limit_notice.go): written
+	// by saveDropped once the lock is let go
+	if dropNotice(key) {
+		noticesDropped.Store(true)
+	}
 }
 
 // liftedRests is when each rest lifted before its time was lifted, by
@@ -2798,6 +2803,11 @@ type holdWriter struct {
 	// one in the same stream (refusalHandover); handedOver says it was
 	over       *refusalHandover
 	handedOver bool
+
+	// retold is how the vendor's error the try wrote is told to the
+	// agent (retell): the held bytes keep magpie's reading of it, which
+	// the rest, the rate hold and the retired model are read from
+	retold []retelling
 }
 
 // onLoop sets what is told of a loop before it ends the reply (reask),
@@ -2945,7 +2955,10 @@ func (h *holdWriter) Write(b []byte) (int, error) {
 	}
 	if h.passing {
 		h.sent(b)
-		return h.w.Write(b)
+		if n, err := h.w.Write(retell(h.retold, b)); err != nil {
+			return n, err
+		}
+		return len(b), nil
 	}
 	n, err := h.held.Write(b)
 	if h.stream && h.failure == 0 {
@@ -3743,7 +3756,7 @@ func (h *holdWriter) release() {
 			streamError(h.w, h.alive.proto, h.alive.model, h.failure, who+" "+h.failMsg)
 		case h.status >= 400:
 			// an error status, once the agent has a stream: told as its error
-			streamError(h.w, h.alive.proto, h.alive.model, h.status, provider.APIError(h.held.Bytes(), http.StatusText(h.status)))
+			streamError(h.w, h.alive.proto, h.alive.model, h.status, retellText(h.retold, provider.APIError(h.held.Bytes(), http.StatusText(h.status))))
 		default:
 			// a reply given whole by a vendor that ignored stream:true,
 			// after the agent was kept alive: sent as the stream it asked
@@ -3753,7 +3766,7 @@ func (h *holdWriter) release() {
 		return
 	}
 	h.pass()
-	h.w.Write(h.held.Bytes())
+	h.w.Write(retell(h.retold, h.held.Bytes()))
 	h.flush()
 }
 
@@ -4965,14 +4978,17 @@ func streamStatus(msg string) int {
 // percent-encoded (pinnedName), and matches as written or decoded.
 func pinTo(raw string, cands []candidate, pl planned) ([]candidate, planned, int, string) {
 	want := pinnedName(raw)
-	match := func(w Weighed) bool {
-		return strings.EqualFold(want, w.Who) || want == w.ID || strings.EqualFold(raw, w.Who) || raw == w.ID
+	// by its stable id too, as AccountsPath lists it: "<provider>/<id>",
+	// or the id alone; a key so, whatever it is named
+	targets := pinTargets(want, append(slices.Clone(pl.order), pl.left...))
+	match := func(w Weighed, c *candidate) bool {
+		return strings.EqualFold(want, w.Who) || want == w.ID || strings.EqualFold(raw, w.Who) || raw == w.ID || pinnedBy(targets, w, c)
 	}
 	var out []candidate
 	var order []Weighed
 	var rests []string
 	for i, c := range cands {
-		if i >= len(pl.order) || !match(pl.order[i]) {
+		if i >= len(pl.order) || !match(pl.order[i], &c) {
 			continue
 		}
 		r, ok := restOf(c.restKey())
@@ -4992,20 +5008,20 @@ func pinTo(raw string, cands []candidate, pl planned) ([]candidate, planned, int
 		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place"
 	}
 	for _, w := range pl.left {
-		if match(w) && w.Held {
+		if match(w, nil) && w.Held {
 			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: the gateway key may not use %s's account", AccountHeader, w.Who)
 		}
-		if match(w) && w.Capped > 0 {
+		if match(w, nil) && w.Capped > 0 {
 			msg, _ := cappedError(w.Model, []Weighed{w}, time.Now())
 			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place"
 		}
-		if match(w) {
+		if match(w, nil) {
 			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)
 		}
 	}
 	var have []string
 	for _, w := range append(slices.Clone(pl.order), pl.left...) {
-		if w.Kind == "account" && !slices.Contains(have, w.Who) {
+		if (w.Kind == "account" || w.Kind == "key") && w.Who != "" && !slices.Contains(have, w.Who) {
 			have = append(have, w.Who)
 		}
 	}

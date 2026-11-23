@@ -42,10 +42,10 @@ var Keys = []string{
 	"redact", "redactPersonal", "redactKinds", "redactWords", "redactWordsAnyCase", "redactWordsWhole", "redactShape",
 	"noStats", "noUsageStats", "otel",
 	// warm-ups and check-ins
-	"codexWarmup", "claudeWarmup", "codexWarmAt", "claudeWarmAt", "codexWarmAts", "claudeWarmAts",
+	"codexWarmup", "claudeWarmup", "agyWarmup", "codexWarmAt", "claudeWarmAt", "codexWarmAts", "claudeWarmAts",
 	"workbuddyCheckin", "traeCheckin", "minimaxCheckin", "qoderCheckin", "checkinAt",
 	// models: replies, vision, images, search
-	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudeNoExtraUsage", "claudePrintMode", "refusalRetries", "retryAfterCap",
+	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudeNoExtraUsage", "claudeRegionHold", "claudePrintMode", "refusalRetries", "retryAfterCap",
 	"vision", "visionEffort", "imageGen", "videoGen", "imageTimeout", "imageResolution", "classifyTimeout",
 	// what every routing group does that says nothing of its own
 	"groupSink", "groupFirstToken", "groupPatience",
@@ -67,6 +67,7 @@ var Choices = map[string][]string{
 	"trayCurrency":    settings.TotalCurrencies,
 	"codexWarmup":     {"off", "week", "all"},
 	"claudeWarmup":    {"off", "week", "all"},
+	"agyWarmup":       {"off", "week", "all"},
 	"trayUsageEvery":  ints(settings.TrayEvery),
 	"dayStart":        {"0", "1", "2", "3", "4", "5", "6"},
 	"updateChannel":   {settings.UpdateStable, settings.UpdateDaily},
@@ -318,6 +319,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.FetchPrivate = cur.FetchPrivate           // in settings.json only
 	in.RouterNote = cur.RouterNote               // set on its own (the Library's servers/hub-note)
 	in.RouterAllTools = cur.RouterAllTools       // set on its own (the Library's servers/hub-tools)
+	in.RouterNoCode = cur.RouterNoCode           // set on its own (the Library's servers/hub-code)
 	in.GitHubToken = cur.GitHubToken             // set on its own (github-token), never sent to the page
 	in.ProxyCustom = cur.ProxyCustom             // set by settings.Save from the proxy, never by the page
 	in.PluginProxyCustom = cur.PluginProxyCustom // and plugin downloads' from theirs
