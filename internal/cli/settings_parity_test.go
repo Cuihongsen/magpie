@@ -189,6 +189,8 @@ var cliForRoute = map[string]string{
 	"POST /api/settings/search-count":      "magpie search count",
 	"POST /api/settings/update-mirror":     "magpie update mirror",
 	"POST /api/sync":                       "magpie sync",
+	"GET /api/artifacts":                   "magpie artifacts",
+	"POST /api/artifacts/delete":           "magpie artifacts delete",
 	"GET /api/davsync":                     "magpie webdav",
 	"POST /api/backup/export":              "magpie backup",
 	"POST /api/backup/import":              "magpie restore",
@@ -400,6 +402,7 @@ var notYet = map[string]string{
 	"GET /api/library/market/skills":             L,  // library.go
 	"GET /api/library/market/pi":                 L,  // library.go
 	"GET /api/library/market/claude":             L,  // library.go
+	"GET /api/library/plugin-tags":               L,  // library.go: the newer release tags a pinned plugin is offered; plugins have no update command yet
 	"GET /api/library/mcp-signin/{id}":           L,  // library.go
 	"GET /api/library/pi":                        L,  // library.go
 	"GET /api/library/rtk":                       L,  // library.go

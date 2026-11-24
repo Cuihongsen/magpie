@@ -1086,6 +1086,12 @@ magpie.plugin("library", (ctx) => {
     if (lib) back.title = t("magpie keeps a copy of every file before it writes it.") + "\n" + tilde(lib.backups);
     else back.disabled = true;
     acts.append(more, back);
+    // Artifacts' way in where the header's row has no tab for it (markNav)
+    const art = button("", "lib-toart", () => window.show("artifacts"));
+    art.title = t("Artifacts");
+    art.append(glyph(GLYPH.doc, "lib-mini"), el("span", "", t("Artifacts")));
+    art.setAttribute("aria-label", t("Artifacts"));
+    acts.prepend(art);
     head.append(acts);
     return head;
   }
@@ -2299,6 +2305,20 @@ magpie.plugin("library", (ctx) => {
         who.append(origin);
         row.append(glyph(GLYPH[{ mcp: "web", hook: "cmd", subagent: "subagent" }[kind] || "skill"]), who);
         if (p.enabled === false) row.append(tag(t("Off in {agent}", { agent: p.agentName }), "warn", t("{agent}'s own settings turn this plugin off", { agent: p.agentName })));
+        // a project's .codex/config.toml turning it on or off (#7244),
+        // which Codex applies once the project is trusted; loading stays
+        // unknown
+        for (const pr of p.inProjects || []) {
+          const project = pr.dir.split(/[\\/]/).filter(Boolean).pop() || pr.dir;
+          const on = pr.effective === true;
+          const why = pr.trusted ? t("Set in {project}'s .codex/config.toml. Whether a session loaded it is unknown.", { project })
+            : pr.set ? t("{project}'s .codex/config.toml turns it on, used once Codex trusts the project.", { project })
+            : t("{project}'s .codex/config.toml turns it off, used once Codex trusts the project.", { project });
+          const x = tag(on ? t("On in {project}", { project }) : t("Off in {project}", { project }), on ? "" : "warn", why);
+          x.classList.add("lib-nativeproj");
+          x.dataset.project = pr.dir;
+          row.append(x);
+        }
         rows.push(row);
       }
     }
@@ -6105,6 +6125,9 @@ magpie.plugin("library", (ctx) => {
     return row;
   }
 
+  // a git source's tag pin, as library/plugin_tags.go reads it
+  const PINNED_TAG = /\/(?:tree|blob|-\/tree|-\/blob|src\/tag|src\/branch)\/v?\d+(?:\.\d+){0,3}(?:[/?#]|$)/;
+
   function pluginDetail(p) {
     const ed = el("div", "editor lib-editor lib-pldetail");
     const head = el("div", "ehead");
@@ -6135,6 +6158,21 @@ magpie.plugin("library", (ctx) => {
     }));
     bar.append(button(t("Cancel"), "", closeLibModal));
     ed.append(bar);
+    // pinned to a release tag (#7549): Update fetches that tag again, so
+    // the repository's newer stable tags are asked for and offered
+    if (PINNED_TAG.test(p.source || "")) {
+      const pin = el("div", "lib-plpin");
+      ed.insertBefore(pin, bar);
+      api("library/plugin-tags?name=" + encodeURIComponent(p.name)).then((r) => {
+        if (!r?.pin) return;
+        pin.append(el("div", "hint", (r.newer || []).length ? t("Pinned to {tag}. Newer releases:", { tag: r.pin }) : t("Pinned to {tag}, the newest release.", { tag: r.pin })));
+        const row = el("div", "lib-plpintags");
+        for (const tag of (r.newer || []).slice(0, 4)) row.append(button(t("Update to {tag}", { tag }), "lib-btn", async () => {
+          if (await change("plugins/upgrade", { name: p.name, tag }, t("{name} is at {tag} now", { name: p.name, tag }))) closeLibModal(true);
+        }));
+        if (row.childNodes.length) pin.append(row);
+      }).catch(() => {}); // the tags unknown: nothing offered, Update still is
+    }
     modal = { dirty: () => false };
     openLib(ed);
   }
@@ -7470,6 +7508,7 @@ magpie.plugin("library", (ctx) => {
     card.append(head);
     if (p.problems?.[""]) card.append(el("div", "lib-err", p.problems[""]));
     if (!isOpen) return card;
+    projectMainOnly(p, card);
     if (mcp) return projectOwn(p, "servers", projectServers(p, card));
     if (sub) return projectOwn(p, "subagents", projectSubagents(p, card));
     if (plg) return projectPlugins(p, card);
@@ -7817,6 +7856,26 @@ magpie.plugin("library", (ctx) => {
     return card;
   }
 
+  // A project in a git repository with other worktrees: they follow it,
+  // unless it is kept to this checkout (#7252). Shown on every tab, since
+  // it holds for everything the project has.
+  function projectMainOnly(p, card) {
+    const n = p.trees?.length || 0;
+    if (!n && !p.mainOnly) return;
+    const opts = el("div", "lib-projopts lib-projmain");
+    const say = t("Only this checkout");
+    const sw = toggle(!!p.mainOnly, say, (on) =>
+      change("projects/main-only", { dir: p.dir, on }, on ? t("{name} is kept to this checkout", { name: p.name }) : t("{name}'s worktrees follow it again", { name: p.name })));
+    const lab = el("label", "lib-projcopy");
+    const words = el("span", "", say);
+    words.onclick = (e) => { e.preventDefault(); sw.click(); };
+    lab.append(sw, words);
+    opts.append(lab, el("span", "note", p.mainOnly
+      ? t("The repository's other worktrees get none of what this project has.")
+      : n === 1 ? t("The repository's other worktree gets what this project has.") : t("The repository's {n} other worktrees get what this project has.", { n })));
+    card.append(opts);
+  }
+
   // A project's Pi packages (#7249): the entries of its .pi/settings.json,
   // each on, off (kept, loading nothing) or removed, and those the project
   // declares itself, left as written until adopted.
@@ -7842,6 +7901,18 @@ magpie.plugin("library", (ctx) => {
       rm.append(svg(GLYPH.trash, 13, 1.4));
       rm.title = t("Remove");
       row.append(glyph(GLYPH.folder), w, sw, rm);
+      box.append(row);
+    }
+    // what another build kept in the project's pi that magpie has no
+    // place for (#7282): shown, never written
+    for (const x of p.piNotCarried || []) {
+      const row = el("div", "row lib-row lib-projskill lib-projownrow lib-projpileft");
+      row.dataset.source = x.source;
+      const w = el("div", "who");
+      const n = el("div", "name mono", x.source);
+      n.append(tag(t("Not carried"), "", t("Another build kept this Pi extension for the project. magpie writes nothing for it; a line for it in .pi/settings.json stays as it is.")));
+      w.append(n);
+      row.append(glyph(GLYPH.folder), w);
       box.append(row);
     }
     for (const o of p.own?.pi || []) {
@@ -10396,6 +10467,9 @@ magpie.plugin("library", (ctx) => {
   }
 
   ctx.onConfig(() => { if (lib && page && !page.hidden) render(); });
+
+  // Work › Artifacts, the pages agents made (artifacts.js)
+  ctx.slots.add("page", artifactsPage());
 
   ctx.slots.add("page", {
     key: "library",

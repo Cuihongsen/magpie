@@ -124,6 +124,11 @@ type Settings struct {
 	// westernUnits, which asked for K/M/B: what that chose is now the
 	// default, so an old file's is left unread.
 	ChineseUnits bool `json:"chineseUnits,omitempty"`
+	// InUncached keeps the Requests list's In at the vendor's own input,
+	// what the prompt cache neither read nor wrote, also where a narrow
+	// window leaves the cache columns out and In otherwise says the whole
+	// prompt (01e13f0e0; JonahFu on X, who wanted In as it was).
+	InUncached bool `json:"inUncached,omitempty"`
 	// DayStart is the hour a day starts at in usage: 0 is midnight, and 1 to
 	// 6 count the small hours before it with the day before (ssharpcc on X,
 	// who codes past 1am). The Usage page, its daily cards and the gateway
@@ -1158,6 +1163,12 @@ type Settings struct {
 	// or an old one, is not shown until it is ticked. HiddenModels is not
 	// read for such an agent. An agent named with no entries is shown none.
 	PickedModels map[string][]string `json:"pickedModels,omitempty"`
+	// PicksJoin are the agents, by id, shown only the models picked for
+	// them (PickedModels) that take in the models picked for a provider as
+	// well (eiyuuzaki2333 on X): a model ticked in a provider's editor, as
+	// it is added or later, is ticked for them too, so it isn't ticked
+	// twice. Another model that comes later still waits to be ticked.
+	PicksJoin []string `json:"picksJoin,omitempty"`
 	// OwnModelsHidden are the agents, by id, whose pickers leave out the
 	// models the agent reaches on its own, not through magpie (DeepSeek
 	// Harness's own DeepSeek models, #1642): only magpie's are offered, and
