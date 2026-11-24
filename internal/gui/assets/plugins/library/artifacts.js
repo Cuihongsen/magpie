@@ -12,6 +12,9 @@ function artifactsPage() {
   const UNLINK = LINK + "M3 3l10 10";
   const open = (url) => api("open", { url }).catch(statusErr);
 
+  // who made a version: its agent, or the page itself (artifact.publish)
+  const by = (v) => (v.agent === "page" ? t("Saved from the page") : v.agentName || v.agent);
+
   function row(a) {
     const v = a.versions[0] || {};
     const r = el("div", "row art-row");
@@ -20,7 +23,7 @@ function artifactsPage() {
     r.setAttribute("role", "link");
     r.title = a.description || a.title;
     const who = el("div", "who");
-    const sub = [v.agentName || v.agent, ago(a.updated)];
+    const sub = [by(v), ago(a.updated)];
     if (a.versions.length > 1) sub.push(t("{n} versions", { n: a.versions.length }));
     if (a.shared) sub.push(t("Shared"));
     who.append(el("div", "name", a.title), el("div", "sub", sub.filter(Boolean).join(" · ")));
@@ -50,7 +53,7 @@ function artifactsPage() {
 
   // every version, newest first, each opened at its own address
   function versions(a, anchor) {
-    const opts = a.versions.map((v) => ({ v: v.url, literalName: true, name: t("Version {n}", { n: v.n }) + (v.label ? " · " + v.label : ""), note: [v.agentName || v.agent, stamp(v.at)].filter(Boolean).join(" · ") }));
+    const opts = a.versions.map((v) => ({ v: v.url, literalName: true, name: t("Version {n}", { n: v.n }) + (v.label ? " · " + v.label : ""), note: [by(v), stamp(v.at)].filter(Boolean).join(" · ") }));
     openProtoMenu(anchor, opts, "", (url) => open(url), "Versions");
   }
 
@@ -128,7 +131,14 @@ function artifactsPage() {
       b.type = "button";
       b.append(svg(COPY_ICON, 13, 1.4));
       b.title = t("Copy");
-      b.onclick = () => copy(t(k), t("Prompt"), b);
+      // the glyph alone turns to a check a moment: flashCopied is for a
+      // button that is only its glyph, and wiped the words (owner, 11-24)
+      b.onclick = async () => {
+        await copy(t(k), t("Prompt"));
+        b.lastChild.replaceWith(svg(CHECK, 13, 1.7));
+        clearTimeout(b.copiedT);
+        b.copiedT = setTimeout(() => b.lastChild.replaceWith(svg(COPY_ICON, 13, 1.4)), 1200);
+      };
       asks.append(b);
     }
     e.append(asks);
@@ -137,7 +147,13 @@ function artifactsPage() {
       const go = el("button", "link", makers.length ? t("Manage") : t("Turn it on in the Library"));
       go.type = "button";
       go.onclick = async () => { if (await window.show("library") !== false) magpie.call("library", "server", "magpie-artifacts"); };
-      if (makers.length) who.append(t("Agents that can make one: {names}", { names: listed(makers) }), " · ");
+      // a few by name; more as a count, the names on hover (25 filled
+      // three lines, owner 11-24)
+      if (makers.length > 3) {
+        const n = el("span", "", t("{n} agents can make one", { n: makers.length }));
+        n.title = listed(makers);
+        who.append(n, " · ");
+      } else if (makers.length) who.append(t("Agents that can make one: {names}", { names: listed(makers) }), " · ");
       else who.append(t("No agent can make one yet."), " ");
       who.append(go);
       e.append(who);

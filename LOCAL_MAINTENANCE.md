@@ -171,6 +171,13 @@ Setup-go 的 module/build cache 会让后续推送走增量。
 `github.repository == 'yetone/magpie'` 守卫；`docker-daily` 和
 `docker-stable` 本来就有这个守卫。
 
+## 官方 v0.1.4758 合并
+
+在已合入 `v0.1.4749` 的维护分支上继续合并官方 `v0.1.4758`。
+上游新增 Claude Code 兼容客户端的来源识别、插件配置和 Artifacts
+相关功能；保留此前的路由分类器降级、Qoder 插件版本更新和本地网关定制。
+验证和构建结果以该合并提交对应的 GitHub Actions 记录为准。
+
 ## 官方 v0.1.4749 合并
 
 本次纳入路由组分类器顺序降级、插件重新登录后的凭据刷新和供应商编辑器的网关密钥设置。

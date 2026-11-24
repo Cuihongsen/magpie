@@ -62,8 +62,9 @@ so the MCP router offers it too.
 
 | Tool | Does |
 | --- | --- |
-| `publish_artifact` | Publishes a page from `file_path` (relative to the agent's folder, `~` and `file://` read) or `html`, with `files` (a local path, `{text}`, `{base64}`, or null to remove one), `title`, `description`, `label`. With `id` it adds a version; with `version` it refuses a publish over a newer one. Answers the page's address. |
-| `read_artifact` | What it is, its versions and files, and the page as published, or one file with `path`, of the newest or a given version. |
+| `publish_artifact` | Publishes a page from `file_path` (relative to the agent's folder, `~` and `file://` read) or `html`, with `files` (a local path, `{text}`, `{base64}`, or null to remove one), `title`, `description`, `label` and `capabilities` ([Page runtime](#page-runtime)). With `id` it adds a version; with `version` it refuses a publish over a newer one. Answers the page's address. |
+| `read_artifact` | What it is, its versions and files, its capabilities and how many documents its data holds, and the page as published, or one file with `path`, of the newest or a given version. |
+| `artifact_data` | The page's data, as its owner: `get`, `list`, `query`, `set`, `update`, `str_replace`, `delete`, `batch`, with the same paths, limits and errors as the page. A write is told to every open view of the page. |
 | `list_artifacts` | Newest first, with `query` over title and description and a `limit`. |
 | `open_artifact` | Opens it in the user's browser (`proc.OpenBrowser`). |
 | `delete_artifact` | Deletes it with every version, for good. |
@@ -72,6 +73,20 @@ The server's `instructions` and the publish tool's description tell the
 agent when to make one: whenever a page would be clearer than text, or the
 user would use the page rather than only read it. They say neither magpie's
 limits nor a vendor's.
+
+An ask for a page reaches `publish_artifact` without naming it, as Claude
+Code's own Artifact tool is reached, only if the model is shown the tool:
+an agent that defers MCP tools behind a search shows a server as one line,
+and a skill of the user's for diagrams then wins (Pi 1.6 with archify,
+owner 11-24). So the publish tool is declared like a built-in tool
+wherever it goes: its `_meta` marks it always loaded (`anthropic/alwaysLoad`
+for Claude Code, `antigravity/alwaysLoad` for Antigravity), the MCP router
+lists it beside `find_tools` and `call_tool` when it gives tools on demand
+(`hubAlwaysLoaded`, [MCP router](mcp-router.md)), and Pi, which reads no
+`_meta`, is given `toolExposure` `{"<router name>": "direct"}` on the
+router's entry, or `{"publish_artifact": "direct"}` on Artifacts' own
+(`piDirect`), while the entry has no `exposure` or `toolExposure` of the
+user's.
 
 The agent a version is recorded under comes from the client name
 (`magpie/client` in `_meta`, then the bridge's header), the caller's key,
@@ -91,9 +106,10 @@ address, so:
   allow-downloads` (`artifactPageCSP`), without `allow-same-origin`. Its
   origin is opaque: it reads no cookie, storage or reply of the gateway's.
 - Its requests come with `Origin: null`. `corsGuard` lets that through for
-  a GET or HEAD under `/a/` alone (`artifactPageRead`), so a page reads its
-  own files; on every other route `Origin: null` without a key is refused
-  as before. Its files are served with `Access-Control-Allow-Origin: *`
+  a GET or HEAD under `/a/` (`artifactPageRead`), so a page reads its own
+  files, and for a POST to `/a/<ref>/_api/db` (`artifactAPICall`), its
+  store, which spends no subscription; on every other route `Origin: null`
+  without a key is refused as before. Its files are served with `Access-Control-Allow-Origin: *`
   so its module scripts and fetches load. The address is the key: a frame
   anywhere that knows it can read the page, as anyone given a link could,
   and a foreign http(s) page is refused by `corsGuard` before it.
@@ -105,6 +121,158 @@ address, so:
 - A page written as a fragment, with no doctype, is put in a document with
   a charset, a viewport and base styles (`Served`), so it doesn't render in
   quirks mode.
+
+## Page runtime
+
+A page written for claude.ai's artifact runtime (contract 0.2.99) runs
+here as written: `window.claude.use(name)` is there before the page's own
+scripts, and resolves `db`, `user`, `artifact` (and `self`, its former
+name), `assets` and the built-in `permissions`
+([internal/artifact/runtime.js](../../internal/artifact/runtime.js),
+[runtime.go](../../internal/artifact/runtime.go),
+[caps.go](../../internal/artifact/caps.go),
+[db.go](../../internal/artifact/db.go),
+[artifacts_api.go](../../internal/gateway/artifacts_api.go),
+[artifacts_self.go](../../internal/gateway/artifacts_self.go),
+[assets.go](../../internal/artifact/assets.go),
+[svg.go](../../internal/artifact/svg.go),
+[artifacts_assets.go](../../internal/gateway/artifacts_assets.go)).
+
+Declaring:
+
+- `publish_artifact` takes `capabilities` as Claude's Artifact tool does
+  (`ParseCapabilities`): left out, the version before's are carried
+  forward; `{}` clears them; any other object is the whole set. A version
+  keeps the declaration it was published with (`Version.Capabilities`).
+- Every name in the contract is accepted and kept; only `ServedCaps` (`db`,
+  `user`, `artifact`, `self`, `assets`) are served, and the rest resolve null on the
+  page, as an unserved capability does on claude.ai. Declaring
+  `permissions` is refused: it is built in. `db`'s `rules`, `user`'s
+  `scopes`, `artifact`'s `{"publish": false}` and `assets`' `upload`
+  (`"interact"` or `"admin"`) are checked at publish.
+
+On the page:
+
+- The runtime and its config are put right after `<head>` (else `<html>`,
+  else the doctype; `WithRuntime`), with every `<` in the config escaped.
+  Namespaces are frozen; `use()` is memoized and resolves an unknown or
+  unserved name null.
+- The config carries the page's token: an HMAC of the artifact id under
+  `<artifacts>/.secret` (0600, `PageToken`). It goes only into a page the
+  browser navigates to (`Sec-Fetch-Mode` navigate or none,
+  `artifactRuntimeFor`, with `Vary: Sec-Fetch-Mode`). A page's files are
+  served with `Access-Control-Allow-Origin: *`, so another page fetching
+  this one's HTML would read a token in it; a fetch gets the page without
+  the runtime.
+- Store calls are `POST /a/<ref>/_api/db` with JSON as `text/plain` (a
+  simple request, so no preflight from the opaque origin); changes come on
+  `GET /a/<ref>/_api/events` (SSE, the token in `t`), which a write by the
+  page, by the agent, or by another magpie process (looked for every 2s)
+  is told on, and `onSnapshot` queries again. A call needs this computer
+  at a loopback Host, the artifact's own token, and a version declaring
+  `db` (`artifactAPIOpen`), else `not_granted` or `revoked`.
+- `user.id()` is one id for the person at this computer (`viewerID`),
+  owner of every artifact here: `isOwner()` and `canEdit()` are true.
+
+The page publishing itself (`artifact`):
+
+- `publish(html)` sends a whole document (doctype first, else
+  `invalid_content`) to `POST /a/<ref>/_api/publish`, built on the
+  version the view is (`base`, the config's `version`). It is saved as
+  the newest version with agent `page` (`PageAgent`; Work › Artifacts
+  says "Saved from the page"), its capabilities and files carried
+  forward. Every open view, this one too, reloads to it. A pinned view
+  (`/a/<id>@<n>/`) goes to the artifact's own address.
+- `publish({path: content})` saves files: a string, a Blob (sent as
+  base64 with its type), `{content, contentType, ifMatch}`,
+  `{delete: true}` or null; `index.html` is the page and can't be
+  deleted. The saving view keeps running, and its next publish builds on
+  the version it made. With `ifMatch` (a sha256, or null for "not there")
+  on every entry, only those files are checked (`Publish.IfMatch`, a
+  `*FileConflict` naming each path's expected and actual sha), so another
+  writer's save to other files may land between; the answer then has
+  `changed`, what that save changed, and the view reloads to bring it.
+  `shas` comes back whenever `ifMatch` was given.
+- A view whose base is no longer the newest is refused `conflict` with
+  `live`, and goes to the winner. Other refusals: `not_declared` (the
+  newest version no longer declares it), `not_granted` (`publish:
+  false`, which `sync` and `edit` refuse too, or another page's token),
+  `too_large`, `invalid_content` (with `limit` for the file count),
+  `rate_limited` (30 a minute per artifact). `edit()` always refuses: a
+  page here changes itself with `publish`. `sync(fn)` runs `fn` and saves
+  nothing, and refuses a page using `<artifact-sync>`.
+- Each new version is told on the events stream as `{"version": n}`, to
+  pages that declare `artifact` or `self`, from the version they are
+  (`v`), so a version published while the page loaded is told at once.
+  A version heard while the view's own publish is on its way waits for
+  that publish's answer, so the view doesn't take its own for another's.
+- A shared artifact is shared again after a page's publish
+  (`ShareLatest`, in the background).
+- `metadata(refs)` (`POST /a/<ref>/_api/meta`) gives the title of each
+  artifact here a ref names, by id, `/a/<id>` or a claude.ai
+  `/artifact/<title>-<id>` link (host ignored), up to 200; it never
+  rejects, and a ref naming nothing gets empty strings.
+
+Assets (`assets`), the files a page keeps for the people using it:
+
+- `upload(blob, {type})` sends the bytes as the body of `POST
+  /a/<ref>/_api/upload?t=<token>&type=<type>`, as `text/plain` so the
+  opaque origin needs no preflight; the type is `options.type`, else the
+  blob's, else `invalid_request`. It answers `{id, url, sizeBytes,
+  contentType}`; `url` is `/_blob/<id>`. `list()` and `delete(id or url)`
+  are `POST /a/<ref>/_api/assets` with `op`; `delete` answers
+  `{deleted}`, false when there is none by that id.
+- The types are the contract's 18 (`AssetTypes`), spelled exactly, no
+  parameters. An asset is at most 20 MiB, a stylesheet or script 16 MiB,
+  an SVG 2 MiB; an artifact holds 1000 and 1 GiB. Text is UTF-8; a
+  binary, stylesheet or script that starts with markup is refused, so
+  nothing uploaded as an image is HTML when opened. An SVG is stored
+  sanitized (`SanitizeSVG`): one `<svg>` root, scripts, `<style>`,
+  `<foreignObject>`, animation and event handlers taken out, a
+  `javascript:` or `data:` URL dropped, and a `<use>` reaches only into
+  the file itself.
+- Refusals are the contract's codes: `too_large` (413),
+  `unsupported_type` (415), `invalid_request` (400), `quota_or_state`
+  (409: the budget, or an artifact deleted), `rate_limited` (60 uploads a
+  minute per artifact), `not_granted` (another page's token, or a version
+  that doesn't declare `assets`), `store_unavailable` (the disk).
+- They are the artifact's, not a version's: `<id>/assets/<asset id>`,
+  listed in `<id>/assets.json`, kept by every publish, gone with the
+  artifact. An id is 160 random bits; `/_blob/<id>` finds it in whichever
+  artifact holds it (`BlobFile`, remembered after the first look), so
+  every version of a page reaches it at the same address.
+- `GET /_blob/<id>` answers a browser on this computer at a loopback Host
+  only, as the type it was uploaded as, with `nosniff`, `Access-Control-
+  Allow-Origin: *` and ranges (a video seeks). Opened as a document it
+  is under `sandbox` and `default-src 'none'`, so even an SVG runs
+  nothing at the gateway's origin; a PDF is left to the browser's viewer.
+  corsGuard lets `Origin: null` read it, as it does a page's files.
+- `upload: "interact"` is accepted and kept; with one person at this
+  computer, owner of every artifact, there is no Contributor to give it
+  to, so it changes nothing here.
+- `read_artifact` says how many assets an artifact has and their size.
+
+The store:
+
+- `<id>/data.db` (SQLite), made at the first write, kept across versions,
+  gone with the artifact (`closeDB` before the folder). Documents at
+  slash paths, an even count of segments a document, odd a collection,
+  as claude.ai's.
+- Its limits are claude.ai's: a document 256 KiB and 32 deep, a path 16
+  segments and 1000 bytes, a query 10 filters, 30 `in` values and 1000
+  rows; a store 25,000 documents and 256 MiB, counted in the `totals`
+  row, which each write updates in its transaction. A write that grows
+  past a limit is `quota_exceeded`; one that shrinks a document always
+  goes.
+- `rules` give each path a read and write level (`view` < `interact` <
+  `admin` < `owner`, and `self`, held by nobody), with `{self}` the
+  viewer's own id; `data/users/<id>/` is the viewer's alone, the owner
+  included. `acquire` takes a lease on a document.
+- A shared copy on usemagpie.ai runs `SharedRuntime`: `window.claude` is
+  there and every capability resolves null, so the page shows what it
+  shows without them. Its data is never shared, and neither are its
+  assets: `/_blob/<id>` isn't served there, so an `<img>` of one shows
+  nothing on a shared copy (#7649).
 
 ## Given to every agent, and Claude Code's own tool
 
@@ -145,8 +313,10 @@ after asking. `POST /api/artifacts/share {id}` answers `{url, version}`
 and `POST /api/artifacts/unshare {id}` takes the link down; the list
 carries `shared` and `sharedVersion`. A find field shows once there are 8 or more. With
 none yet, the page says what one is, offers three things to ask an agent
-for (a click copies one), and names the agents Magpie Artifacts is ticked
-on, with the way to its server in the Library (`magpie.call("library",
+for in plain words (a click copies one; only its glyph turns to a
+check), and names
+the agents Magpie Artifacts is ticked on (more than three as a count, the
+names on hover), with the way to its server in the Library (`magpie.call("library",
 "server", …)`); for that, `GET /api/artifacts` with an empty list carries
 `agents`, their names (`library.ArtifactsAgents`, none when the server is
 off), left out when the library can't be read so the page says nothing of
@@ -222,11 +392,12 @@ magpie:
 
 ```sh
 go test -tags nogui ./internal/artifact
-go test -tags nogui ./internal/gateway -run 'TestArtifact'
+go test -tags nogui ./internal/gateway -run 'TestArtifact|TestAssets'   # TestArtifactPage* hold the page runtime's API
 go test -tags nogui ./internal/library -run 'TestArtifacts'
 go test -tags nogui ./internal/gui -run 'TestArtifactsAPI|TestArtifactsShareAPI|TestBuiltin'
 go test -tags nogui ./internal/cli -run 'TestArtifacts|TestEveryRouteHasACommandOrIsNamed'
 node --test internal/gui/tests/artifacts-page.test.cjs
+node --test internal/gui/tests/artifact-runtime.test.cjs
 node --test site/shares.test.mjs
 node --test internal/gui/tests/nav-pages-order.test.cjs internal/gui/tests/builtins.test.cjs
 ```
