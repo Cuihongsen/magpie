@@ -12,6 +12,12 @@
 其他模型；额度和余额耗尽不使用该 15 秒规则。原生路由的单候选或最后
 备用候选仍可在冷却期间尝试，因此这不是严格的请求间隔保证。
 
+2026-11-24 修复 DSH 上下文压缩遇到 MiniMax `insufficient balance
+(1008)` 时触发疯狂重试、延迟组内备用路由的问题。已被识别为余额耗尽的
+429 跳过疯狂重试，进入原生余额冷却与备用候选处理；瞬时限流 429 仍按原
+疯狂重试次数与 100ms 间隔处理。`TestDshCompactFallsBackAfterMinimaxBalanceLimit`
+用 DSH 压缩请求、MiniMax 原始错误及健康备用渠道覆盖此路径。
+
 2026-11-10 的 `custom-cooldown15` 二进制 SHA-256 为
 `85ce807d4a7b503c2a2234b0974dc498d315292cef94f20d5beb6e36b63b536d`。
 本机回环假上游验证了 combined-token 恢复，定向路由和 race 测试通过。

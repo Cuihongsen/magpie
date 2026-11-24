@@ -5055,7 +5055,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			continue
 		}
 		watched.attempt(call, try, c.p.ID, sent, hw, capture)
-		crazyRate := c.p.CrazyRetryLimit() > 0 && !held && call.To != "" && hw.code() == http.StatusTooManyRequests
+		crazyRate := c.p.CrazyRetryLimit() > 0 && !held && call.To != "" &&
+			hw.code() == http.StatusTooManyRequests && !depletedBalance429(hw.code(), hw.errBody())
 		if crazyRate && crazyRetries[c.p.ID] < c.p.CrazyRetryLimit() && hw.mayAskAgain() && !hw.refused {
 			if wait, ok := crazyRetryWait(hw.header, time.Now()); ok && !kept.tooQuiet(wait) {
 				crazyRetries[c.p.ID]++

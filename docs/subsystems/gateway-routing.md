@@ -29,6 +29,10 @@ already passed to the client. It waits 100 milliseconds between attempts,
 including when the upstream requests a longer Retry-After. If the client
 cannot wait, normal failure handling resumes. Once the budget is
 exhausted, the native short retry and patience loops do not extend it.
+An error classified as exhausted credit, including MiniMax's HTTP 429
+`insufficient balance (1008)`, skips crazy retry and follows the normal
+credit rest and fallback path; repeating it cannot restore a depleted
+balance.
 
 An optional provider `errorCooldownSeconds` puts the whole provider aside
 for that many seconds after its final upstream 4xx or 5xx response. Other

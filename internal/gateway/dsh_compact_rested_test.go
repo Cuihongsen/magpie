@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -160,4 +162,62 @@ func TestDshCompactStaysUnlessRested(t *testing.T) {
 			t.Fatalf("%d, Trae CN asked for %v", w.Code, asked("trae-cn"))
 		}
 	})
+}
+
+func TestDshCompactFallsBackAfterMinimaxBalanceLimit(t *testing.T) {
+	fresh(t)
+	oldPause := retryPause
+	retryPause = time.Millisecond
+	t.Cleanup(func() { retryPause = oldPause })
+	noRests()
+	t.Cleanup(noRests)
+
+	var minimaxCalls, backupCalls atomic.Int32
+	minimax := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		minimaxCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"code":null,"message":"MiniMax Code: usage limit reached: insufficient balance (1008) (HTTP 429, rate_limit_error)","type":"rate_limit_error"}}`)
+	}))
+	t.Cleanup(minimax.Close)
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"reply","type":"message","role":"assistant","model":"deepseek-v4.1-flash","content":[{"type":"text","text":"checkpoint"}],"stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":1}}`)
+	}))
+	t.Cleanup(backup.Close)
+
+	for _, p := range []provider.Provider{
+		{ID: "minimax-code", Name: "MiniMax Code", Key: "k1", Anthropic: minimax.URL, Models: []string{"deepseek-v4.1-flash"}, CrazyRetry: true, CrazyRetryCount: 2},
+		{ID: "ths", Name: "THS", Key: "k2", Anthropic: backup.URL, Models: []string{"deepseek-v4.1-flash"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.SaveGroup(provider.Group{
+		Name: "deepseek-primary-pool",
+		Members: []string{
+			"minimax-code/deepseek-v4.1-flash",
+			"ths/deepseek-v4.1-flash",
+		},
+		Routing:  provider.Ordered,
+		Patience: -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := dshSend(New(), "group/deepseek-primary-pool", dshCompactAsk)
+	if code != http.StatusOK {
+		t.Fatalf("DSH compaction returned %d: %s", code, body)
+	}
+	if got := minimaxCalls.Load(); got != 1 {
+		t.Fatalf("MiniMax balance failure was retried %d times, want one attempt", got)
+	}
+	if got := backupCalls.Load(); got != 1 {
+		t.Fatalf("healthy fallback was called %d times, want one", got)
+	}
+	if strings.Contains(body, "insufficient balance") {
+		t.Fatalf("upstream balance error leaked to DSH: %s", body)
+	}
 }
