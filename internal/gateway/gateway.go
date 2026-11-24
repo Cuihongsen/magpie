@@ -86,6 +86,10 @@ func agentOf(r *http.Request) string {
 	if codexForClaudeCode(r.Header) {
 		return "codex"
 	}
+	if a := cloneOf(r); a != "" {
+		// omp in Claude Code's headers (claude_clones.go)
+		return a
+	}
 	return usage.AgentOf(ua)
 }
 
@@ -967,6 +971,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		go provider.KeepCodexWindowsWarm(ctx)
 		go provider.KeepClaudeWindowsWarm(ctx, warmClaude)
 		go provider.KeepAgyWindowsWarm(ctx)
+		// and keeps Antigravity's fast-tools plugin starting a magpie that
+		// is there, once it is on
+		go keepFastTools()
 		// and spends a Codex reset about to run out unused, for the accounts
 		// that let it
 		go provider.KeepResetsFromRunningOut(ctx)
@@ -1256,6 +1263,13 @@ func (s *Server) routes() *routeMux {
 	// an artifact's page and files, in a sandbox of their own (artifacts_mcp.go)
 	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}", s.artifactPage)
 	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/{path...}", s.artifactPage)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"db", s.artifactDB)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"events", s.artifactEvents)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"publish", s.artifactPublish)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"meta", s.artifactMeta)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"upload", s.artifactUpload)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"assets", s.artifactAssets)
+	mux.HandleFunc("GET "+artifactBlobPath+"{id}", s.artifactBlob)
 	mux.HandleFunc(ImageMCPPath, s.imageMCP)
 	mux.HandleFunc(BrowserMCPPath, s.browserMCP)
 	mux.HandleFunc("GET "+BrowserExtensionPath, s.browserExtension)
@@ -2282,6 +2296,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Anthropic, 400, err.Error())
 		return
 	}
+	r = withClone(r, provider.Anthropic, body)
 	// counted as it will be sent: its tool exchange mended where it
 	// doesn't pair (tool_blocks_paired.go)
 	body = toolBlocksPaired(body)
@@ -2507,6 +2522,9 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 		// Qoder 1.1.82 and later name no session: the one of its own
 		// session files the request holds the prompts of (qoder_session.go)
 		r = qoderSession(r, from, body)
+		// an agent in Claude Code's headers is named as itself
+		// (claude_clones.go)
+		r = withClone(r, from, body)
 		// a Claude Code Message Thread magpie keeps no history for: sent
 		// again whole, without it (message_threads.go, #2480)
 		if from == provider.Anthropic && namesThread(body) {
@@ -3889,6 +3907,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		patienceFallback = waitsOf(p.Patience, singlePatience)
 	}
 	patience = maxWaits(cands, patienceFallback)
+	if patienceSpared(r) {
+		patience = 0 // a classifier with another after it (askChat)
+	}
 	var busyNow []busyTry  // the members of this round that failed so
 	rounds := 0            // the rounds they were asked again in
 	var waitFrom time.Time // when every member had first failed so
@@ -5055,7 +5076,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			continue
 		}
 		watched.attempt(call, try, c.p.ID, sent, hw, capture)
-		crazyRate := c.p.CrazyRetryLimit() > 0 && !held && call.To != "" && hw.code() == http.StatusTooManyRequests
+		crazyRate := c.p.CrazyRetryLimit() > 0 && !held && call.To != "" &&
+			hw.code() == http.StatusTooManyRequests && !depletedBalance429(hw.code(), hw.errBody())
 		if crazyRate && crazyRetries[c.p.ID] < c.p.CrazyRetryLimit() && hw.mayAskAgain() && !hw.refused {
 			if wait, ok := crazyRetryWait(hw.header, time.Now()); ok && !kept.tooQuiet(wait) {
 				crazyRetries[c.p.ID]++

@@ -23,6 +23,14 @@ import (
 // under, the name the gateway's own artifacts server goes by (ownMCP).
 const ArtifactsServerName = "magpie-artifacts"
 
+// artifactsKey is Magpie Artifacts' server as serverKey gives it, and
+// artifactPublish its tool that makes a page (gateway's
+// artifactPublishTool).
+const (
+	artifactsKey    = "magpie mcp artifacts"
+	artifactPublish = "publish_artifact"
+)
+
 // claudeArtifactTool is Claude Code's own tool for artifacts, as its
 // permission rules name it.
 const claudeArtifactTool = "Artifact"
@@ -77,7 +85,7 @@ func (l *Library) adoptArtifacts() bool {
 // and written into its config (given) or reached through the hub.
 func (l *Library) artifactsGiven(id string, given []string) bool {
 	for _, s := range l.MCP {
-		if s == nil || serverKey(s) != "magpie mcp artifacts" || !slices.Contains(s.Agents, id) {
+		if s == nil || serverKey(s) != artifactsKey || !slices.Contains(s.Agents, id) {
 			continue
 		}
 		if slices.Contains(given, s.Name) || (l.MCPHub && inHub(s, id)) {
@@ -85,4 +93,27 @@ func (l *Library) artifactsGiven(id string, given []string) bool {
 		}
 	}
 	return false
+}
+
+// ArtifactsAgents is the agents Magpie Artifacts is ticked on, sorted,
+// for Work › Artifacts' empty page to say who can make one; none when the
+// server is off or gone.
+func ArtifactsAgents() ([]string, error) {
+	l, err := loadLocked()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, s := range l.MCP {
+		if s == nil || s.Hidden || serverKey(s) != artifactsKey {
+			continue
+		}
+		for _, a := range s.Agents {
+			if !slices.Contains(out, a) {
+				out = append(out, a)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }

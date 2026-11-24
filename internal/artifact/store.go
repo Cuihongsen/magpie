@@ -17,14 +17,18 @@ package artifact
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -83,6 +87,8 @@ type Version struct {
 	// Files are the version's files besides the page, by published path
 	Files []string `json:"files,omitempty"`
 	Size  int64    `json:"size"`
+	// Capabilities are what the page may do beyond static HTML (caps.go)
+	Capabilities Capabilities `json:"capabilities,omitempty"`
 }
 
 // Latest is the newest version.
@@ -122,6 +128,14 @@ type Publish struct {
 	// Base, when set, is the version the publisher last read: a publish
 	// over a newer one is refused (ErrConflict)
 	Base int
+	// IfMatch holds files to what the publisher last read, by published
+	// path (Page for the page): the sha256 (FileSHA) each still has, nil
+	// for one that isn't there yet. A file that no longer matches
+	// refuses the publish with a *FileConflict.
+	IfMatch map[string]*string
+	// Capabilities: nil keeps the version before's, an empty map
+	// clears them, any other is the whole set (ParseCapabilities)
+	Capabilities Capabilities
 }
 
 var (
@@ -129,6 +143,11 @@ var (
 	// ErrConflict: the artifact has a version newer than the one the
 	// publish was built on
 	ErrConflict = errors.New("the artifact has a newer version than the one read")
+	// ErrTooLarge and ErrInvalid are a publish refused for its size and
+	// for what it holds (a page that isn't text, a bad path): its error
+	// Is one of them, with its own words
+	ErrTooLarge = errors.New("too large to publish")
+	ErrInvalid  = errors.New("not publishable")
 )
 
 var mu sync.Mutex
@@ -224,8 +243,15 @@ func List() ([]*Artifact, error) {
 	return out, errors.Join(bad...)
 }
 
-// Delete takes the artifact and every version of it away.
+// Delete takes the artifact and every version of it away, its shared
+// link first: one that can't be taken down keeps the artifact, so its
+// token isn't lost with it.
 func Delete(id string) error {
+	shareMu.Lock()
+	defer shareMu.Unlock()
+	if err := unshare(context.Background(), id); err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("its shared link couldn't be taken down, so it is kept: %w", err)
+	}
 	defer lock()()
 	if _, err := readMeta(id); err != nil {
 		return err
@@ -234,6 +260,7 @@ func Delete(id string) error {
 	if err := os.Remove(filepath.Join(folder(id), metaName)); err != nil {
 		return err
 	}
+	closeDB(id)
 	return os.RemoveAll(folder(id))
 }
 
@@ -257,33 +284,102 @@ func CleanPath(p string) (string, error) {
 	if c == Page {
 		return "", fmt.Errorf("%s is the page itself: publish it as the page", Page)
 	}
+	if first, _, _ := strings.Cut(c, "/"); first == "_api" || first == "_blob" {
+		return "", fmt.Errorf("%q: %s/ is where the page runtime is served", p, first)
+	}
 	return c, nil
+}
+
+// refused is a publish refused as kind (ErrTooLarge, ErrInvalid), in err's
+// words.
+type refused struct{ err, kind error }
+
+func (r refused) Error() string   { return r.err.Error() }
+func (r refused) Unwrap() []error { return []error{r.err, r.kind} }
+
+func refuse(kind, err error) error { return refused{err, kind} }
+
+// FileLimit refuses a version that would hold more than Max files besides
+// its page; it is an ErrInvalid.
+type FileLimit struct{ Max, Would int }
+
+func (l *FileLimit) Error() string {
+	return fmt.Sprintf("a version holds at most %d files besides its page; this one would hold %d", l.Max, l.Would)
+}
+
+func (l *FileLimit) Is(err error) bool { return err == ErrInvalid }
+
+// ConflictPath is a file whose IfMatch no longer held: Actual is its
+// sha256 now, nil when it isn't there.
+type ConflictPath struct {
+	Path     string  `json:"path"`
+	Expected *string `json:"expected"`
+	Actual   *string `json:"actual"`
+}
+
+// FileConflict refuses a publish whose IfMatch didn't hold; it is an
+// ErrConflict.
+type FileConflict struct {
+	Newest int
+	Paths  []ConflictPath
+}
+
+func (c *FileConflict) Error() string {
+	names := make([]string, len(c.Paths))
+	for i, p := range c.Paths {
+		names[i] = p.Path
+	}
+	return fmt.Sprintf("%v: %s changed in version %d", ErrConflict, strings.Join(names, ", "), c.Newest)
+}
+
+func (c *FileConflict) Is(err error) bool { return err == ErrConflict }
+
+// FileSHA is the sha256, in hex, of version n's (0: the newest) file
+// name (Page or "" for the page); ok is false when it has none.
+func FileSHA(id string, n int, name string) (sum string, ok bool, err error) {
+	where, _, err := File(id, n, name)
+	if errors.Is(err, ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	f, err := os.Open(where)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", false, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), true, nil
 }
 
 // PublishPage writes a new artifact, or a new version of one.
 func PublishPage(p Publish) (*Artifact, error) {
 	if p.ID == "" && p.Page == nil {
-		return nil, errors.New("a new artifact needs its page")
+		return nil, refuse(ErrInvalid, errors.New("a new artifact needs its page"))
 	}
 	if len(p.Page) > MaxPage {
-		return nil, fmt.Errorf("the page is %d bytes; the most is %d", len(p.Page), MaxPage)
+		return nil, refuse(ErrTooLarge, fmt.Errorf("the page is %d bytes; the most is %d", len(p.Page), MaxPage))
 	}
 	if p.Page != nil && !utf8.Valid(p.Page) {
-		return nil, errors.New("the page isn't UTF-8 text")
+		return nil, refuse(ErrInvalid, errors.New("the page isn't UTF-8 text"))
 	}
 	files := map[string][]byte{}
 	removed := map[string]bool{}
 	for k, v := range p.Files {
 		c, err := CleanPath(k)
 		if err != nil {
-			return nil, err
+			return nil, refuse(ErrInvalid, err)
 		}
 		if v == nil {
 			removed[c] = true
 			continue
 		}
 		if len(v) > MaxFile {
-			return nil, fmt.Errorf("%s is %d bytes; the most a file may be is %d", c, len(v), MaxFile)
+			return nil, refuse(ErrTooLarge, fmt.Errorf("%s is %d bytes; the most a file may be is %d", c, len(v), MaxFile))
 		}
 		files[c] = v
 	}
@@ -305,6 +401,24 @@ func PublishPage(p Publish) (*Artifact, error) {
 		if p.Base > 0 && p.Base != prev.N {
 			return nil, fmt.Errorf("%w: version %d is the newest, and the publish was built on %d", ErrConflict, prev.N, p.Base)
 		}
+		var bad []ConflictPath
+		for _, name := range slices.Sorted(maps.Keys(p.IfMatch)) {
+			want := p.IfMatch[name]
+			sum, there, err := FileSHA(a.ID, prev.N, name)
+			if err != nil {
+				return nil, err
+			}
+			if there && (want == nil || *want != sum) || !there && want != nil {
+				c := ConflictPath{Path: name, Expected: want}
+				if there {
+					c.Actual = &sum
+				}
+				bad = append(bad, c)
+			}
+		}
+		if bad != nil {
+			return nil, &FileConflict{Newest: prev.N, Paths: bad}
+		}
 	}
 	n := 1
 	if prev != nil {
@@ -324,12 +438,12 @@ func PublishPage(p Publish) (*Artifact, error) {
 	slices.Sort(all)
 	all = slices.Compact(all)
 	if len(all) > MaxFiles {
-		return nil, fmt.Errorf("a version holds at most %d files besides its page; this one would hold %d", MaxFiles, len(all))
+		return nil, &FileLimit{Max: MaxFiles, Would: len(all)}
 	}
 	// a file and a folder of the same name can't both be there
 	for i := 1; i < len(all); i++ {
 		if strings.HasPrefix(all[i], all[i-1]+"/") {
-			return nil, fmt.Errorf("%s is a file, so %s can't be inside it", all[i-1], all[i])
+			return nil, refuse(ErrInvalid, fmt.Errorf("%s is a file, so %s can't be inside it", all[i-1], all[i]))
 		}
 	}
 
@@ -382,7 +496,7 @@ func PublishPage(p Publish) (*Artifact, error) {
 		size += int64(len(b))
 	}
 	if size > MaxVersion {
-		return nil, fmt.Errorf("the version would be %d bytes; the most is %d", size, MaxVersion)
+		return nil, refuse(ErrTooLarge, fmt.Errorf("the version would be %d bytes; the most is %d", size, MaxVersion))
 	}
 	if err := os.Rename(tmp, versionDir(a.ID, n)); err != nil {
 		return nil, err
@@ -404,11 +518,19 @@ func PublishPage(p Publish) (*Artifact, error) {
 		a.Description = desc
 	}
 	a.Updated = now
-	a.Versions = append(a.Versions, Version{N: n, At: now, Label: label, Agent: oneLine(p.Agent, 64), Files: all, Size: size})
+	caps := p.Capabilities
+	if caps == nil && prev != nil {
+		caps = prev.Capabilities
+	}
+	if len(caps) == 0 {
+		caps = nil
+	}
+	a.Versions = append(a.Versions, Version{N: n, At: now, Label: label, Agent: oneLine(p.Agent, 64), Files: all, Size: size, Capabilities: caps})
 	if err := writeMeta(a); err != nil {
 		os.RemoveAll(versionDir(a.ID, n))
 		return nil, err
 	}
+	notifyVersion(a.ID, n)
 	return a, nil
 }
 
@@ -473,6 +595,14 @@ func PageTitle(page []byte) string {
 }
 
 var doctypeRe = lazyre.New(`(?i)^\s*(<!--.*?-->\s*)*<!doctype\s`)
+
+// Whole is whether page is a whole document, its doctype first, as a page
+// that publishes itself sends it.
+func Whole(page []byte) bool { return doctypeRe.Match(page) }
+
+// PageAgent is the Agent of a version the page published itself (the
+// artifact capability), as the user viewing it.
+const PageAgent = "page"
 
 // Served is the page as a browser is given it: one written as a fragment,
 // with no doctype, is put in a document of its own with a charset, a

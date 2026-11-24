@@ -158,6 +158,11 @@ function saveContext(settings) {
   const end = source.indexOf("\n  saveBtn.onclick = save;", start);
   assert(start >= 0 && end > start);
   vm.runInContext(source.slice(start, end) + "\nthis.save = save;", context);
+  const save = context.save;
+  context.save = async () => {
+    save();
+    await new Promise(setImmediate);
+  };
   return context;
 }
 

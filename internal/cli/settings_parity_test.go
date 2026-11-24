@@ -191,6 +191,8 @@ var cliForRoute = map[string]string{
 	"POST /api/sync":                       "magpie sync",
 	"GET /api/artifacts":                   "magpie artifacts",
 	"POST /api/artifacts/delete":           "magpie artifacts delete",
+	"POST /api/artifacts/share":            "magpie artifacts share",
+	"POST /api/artifacts/unshare":          "magpie artifacts unshare",
 	"GET /api/davsync":                     "magpie webdav",
 	"POST /api/backup/export":              "magpie backup",
 	"POST /api/backup/import":              "magpie restore",
@@ -368,6 +370,8 @@ var notYet = map[string]string{
 	"POST /api/library/browser/drag":             L,  // browser.go
 	"POST /api/library/browser/extension":        L,  // browser.go
 	"GET /api/caller-keys/models":                P,  // caller_keys.go
+	"GET /api/provider-keys":                     P,  // caller_keys.go: a provider's side of the keys' models; `gateway-key models` writes the same list
+	"POST /api/provider-keys":                    P,  // caller_keys.go
 	"GET /api/caller-keys/mcp":                   L,  // caller_keys.go: the servers `magpie gateway-key mcp` takes
 	"POST /api/config/repair":                    A,  // config_repair.go
 	"GET /api/context":                           U,  // context.go

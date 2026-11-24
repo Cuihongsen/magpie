@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,7 @@ const (
 	artifactListTool    = "list_artifacts"
 	artifactDeleteTool  = "delete_artifact"
 	artifactOpenTool    = "open_artifact"
+	artifactDataTool    = "artifact_data"
 
 	// artifactsMCPBody is the most a message may be: a version's 64 MiB in
 	// base64, and the JSON around it
@@ -116,7 +118,8 @@ func artifactsMCPTools() []any {
 				"Write the page to a file and pass file_path (or pass the page as html). The page is self-contained HTML; a <title> of two to four words names it. " +
 				"Supporting files (scripts, styles, data, images, more pages) go in files, by the relative path the page uses, each from a local file. " +
 				"To change an artifact, pass its id: a new version is made at the same address; files left out are kept and null removes one. " +
-				"Pass the version you last read or published to refuse a publish over a newer one. Give the user the address from the answer.",
+				"Pass the version you last read or published to refuse a publish over a newer one. Give the user the address from the answer. " +
+				"Only the user shares an artifact, from magpie; once they have, its shared link shows each version published after.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -134,11 +137,23 @@ func artifactsMCPTools() []any {
 							map[string]any{"type": "null"},
 						}},
 					},
+					"capabilities": map[string]any{
+						"type": "object",
+						"description": "What the page may do beyond static HTML, as Claude's artifacts declare it: {\"db\": {}, \"user\": {}}. " +
+							"db keeps data outside the page, which the page reads and writes through `await claude.use(\"db\")` (doc, collection, get, set, update, delete, where, orderBy, limit, onSnapshot) and you read and seed with " + artifactDataTool + "; " +
+							"{\"db\": {\"rules\": [{\"path\": …, \"read\": …, \"write\": …}]}} sets who reads and writes where. user is who views it, through `await claude.use(\"user\")`. " +
+							"artifact lets the page save itself: `await (await claude.use(\"artifact\")).publish(html)` publishes the whole page, state embedded, as the newest version, and every open view reloads to it; publish({path: content}) saves files and keeps the page running. " +
+							"assets keeps files people add (images, video, PDF, fonts, CSV and text, 20 MiB each): `(await claude.use(\"assets\")).upload(blob)` gives {id, url}; keep the id in db and show it at \"/_blob/\" + id. " +
+							"Any other capability resolves null on the page here, so a page lights it up only when it is there. Left out, an update keeps the version before's; {} clears them.",
+					},
 					"label":   map[string]any{"type": "string", "description": "A short name for this version, at most 60 characters"},
 					"version": map[string]any{"type": "integer", "minimum": 1, "description": "The version this publish was built on; a newer one makes it fail instead of being written over"},
 				},
 			},
 			"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+			// declared to the model at once, as a built-in tool is, so an ask
+			// for a page reaches it without naming it (hubAlwaysLoaded)
+			"_meta": hubAlwaysLoadMeta(),
 		},
 		map[string]any{
 			"name":        artifactReadTool,
@@ -178,6 +193,34 @@ func artifactsMCPTools() []any {
 				"required":   []string{"id"},
 			},
 			"annotations": map[string]any{"readOnlyHint": true, "openWorldHint": false},
+		},
+		map[string]any{
+			"name":  artifactDataTool,
+			"title": "Artifact data",
+			"description": "Reads and writes the data of an artifact whose page declares the db capability: the documents its page reads with claude.use(\"db\"). " +
+				"Paths alternate collection and document: \"tasks\" is a collection, \"tasks/t1\" a document in it; a document's body is a JSON object. " +
+				"Seed a new page's data here after publishing it, never hard-coded in the page. Each write shows at once on every open view of the page. " +
+				"action: get (the document at path), list (the collections, or the documents of the collection at path), query (the collection at path with where, order_by, desc and limit), " +
+				"set (write the whole document), update (merge data into it; nested objects merge, arrays are replaced), str_replace (replace old_str, once, in the document's JSON as get shows it), " +
+				"delete (the document at path), batch (ops, together or not at all).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":       ref,
+					"action":   map[string]any{"type": "string", "enum": []string{"get", "list", "query", "set", "update", "str_replace", "delete", "batch"}},
+					"path":     map[string]any{"type": "string", "description": "A document's path (an even number of segments) or a collection's (odd)"},
+					"data":     map[string]any{"type": "object", "description": "The document's body, for set and update"},
+					"where":    map[string]any{"type": "array", "description": "For query: at most 10 filters, each {field, op, value}; op is one of == != < <= > >= in not-in array-contains", "items": map[string]any{"type": "object", "properties": map[string]any{"field": map[string]any{"type": "string"}, "op": map[string]any{"type": "string"}, "value": map[string]any{}}}},
+					"order_by": map[string]any{"type": "string", "description": "For query: the field to sort by; left out, by id"},
+					"desc":     map[string]any{"type": "boolean"},
+					"limit":    map[string]any{"type": "integer", "minimum": 1, "maximum": 1000},
+					"old_str":  map[string]any{"type": "string", "description": "For str_replace: text that is in the document's JSON once"},
+					"new_str":  map[string]any{"type": "string", "description": "For str_replace: what takes its place"},
+					"ops":      map[string]any{"type": "array", "description": "For batch: at most 500 writes, each {op: set|update|delete, path, data}", "items": map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}, "data": map[string]any{"type": "object"}}}},
+				},
+				"required": []string{"id", "action"},
+			},
+			"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
 		},
 		map[string]any{
 			"name":        artifactDeleteTool,
@@ -242,6 +285,18 @@ type artifactArgs struct {
 	Path        string                     `json:"path"`
 	Query       string                     `json:"query"`
 	Limit       flexCount                  `json:"limit"`
+	// capabilities, for a publish; as given, so ParseCapabilities tells
+	// left out from {}
+	Capabilities json.RawMessage `json:"capabilities"`
+	// artifact_data's
+	Action  string            `json:"action"`
+	Data    json.RawMessage   `json:"data"`
+	Where   []artifact.Filter `json:"where"`
+	OrderBy string            `json:"order_by"`
+	Desc    bool              `json:"desc"`
+	OldStr  *string           `json:"old_str"`
+	NewStr  *string           `json:"new_str"`
+	Ops     []artifact.Op     `json:"ops"`
 }
 
 // artifactCaller is who publishes, and the folder its relative paths are
@@ -340,7 +395,9 @@ func (s *Server) artifactsMCPCall(r *http.Request, m mcpMessage) (any, map[strin
 			"serverInfo":      map[string]any{"name": artifactsServerName, "title": "Magpie Artifacts", "version": Version},
 			"instructions": "Artifacts are private pages on this computer, kept with every version, that the user opens in their browser. " +
 				"When a page would be clearer than text, or the user would use the page rather than only read it (a report, a chart, a dashboard, a diagram, an explainer, a prototype, a small app), write it as HTML and publish it with " + artifactPublishTool + ", then give the user its address. " +
-				"To change one, read it first with " + artifactReadTool + " and publish with its id. Delete one only when the user asks.",
+				"To change one, read it first with " + artifactReadTool + " and publish with its id. Delete one only when the user asks. " +
+				"A page that keeps data (a poll, a tracker, a board, a sign-up sheet) declares capabilities {\"db\": {}, \"user\": {}} and reads it with `await claude.use(\"db\")`, as Claude's artifacts do; seed and read its data with " + artifactDataTool + ". " +
+				"A page that is its own record (a checklist kept in the page) declares {\"artifact\": {}} and publishes itself with `(await claude.use(\"artifact\")).publish(html)`.",
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
@@ -378,9 +435,11 @@ func (s *Server) artifactsMCPCall(r *http.Request, m mcpMessage) (any, map[strin
 			said, err = artifactOpen(a)
 		case artifactDeleteTool:
 			said, err = artifactDelete(a)
+		case artifactDataTool:
+			said, err = artifactData(a)
 		default:
 			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": this server has " +
-				strings.Join([]string{artifactPublishTool, artifactReadTool, artifactListTool, artifactOpenTool, artifactDeleteTool}, ", ")}
+				strings.Join([]string{artifactPublishTool, artifactReadTool, artifactListTool, artifactOpenTool, artifactDataTool, artifactDeleteTool}, ", ")}
 		}
 		if err != nil {
 			return toolResult(err.Error(), true), nil
@@ -417,6 +476,11 @@ func artifactNamed(a artifactArgs) (*artifact.Artifact, int, error) {
 
 func artifactPublish(c *artifactCaller, a artifactArgs) (string, error) {
 	p := artifact.Publish{Title: a.Title, Description: a.Description, Label: a.Label, Agent: c.agent, Base: int(a.Version)}
+	caps, err := artifact.ParseCapabilities(a.Capabilities)
+	if err != nil {
+		return "", err
+	}
+	p.Capabilities = caps
 	if strings.TrimSpace(a.ID) != "" {
 		id, _, ok := ArtifactRef(a.ID)
 		if !ok {
@@ -485,8 +549,42 @@ func artifactPublish(c *artifactCaller, a artifactArgs) (string, error) {
 	if len(v.Files) > 0 {
 		fmt.Fprintf(&b, ", with %s", strings.Join(v.Files, ", "))
 	}
-	b.WriteString(".\nIt is private to this computer: give the user the address.")
+	b.WriteString(".\n")
+	if l := capsLine(v); l != "" {
+		b.WriteString(l + "\n")
+		if v.Capabilities.Has("db") {
+			if docs, _, _ := artifact.Stats(art.ID); docs == 0 {
+				fmt.Fprintf(&b, "Its data is empty: seed what the page needs with %s.\n", artifactDataTool)
+			}
+		}
+	}
+	sh, err := artifact.Shared(art.ID)
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "Whether it is shared doesn't read: %v. Give the user the address.", err)
+	case sh == nil:
+		b.WriteString("It is private to this computer: give the user the address.")
+	default:
+		// the user shared it: its link shows each new version
+		ctx, cancel := context.WithTimeout(c.r.Context(), 3*time.Minute)
+		sh2, err := artifact.ShareLatest(ctx, art.ID)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(&b, "The user shared it at %s, which still shows version %d: %v. Give the user the address, and say so.", sh.URL, sh.Version, err)
+		} else {
+			fmt.Fprintf(&b, "The user shared it: anyone with its link, %s, sees this version now. Give the user the address.", sh2.URL)
+		}
+	}
 	return b.String(), nil
+}
+
+// sharedLine says where the artifact is shared, or "" when it isn't.
+func sharedLine(id string) string {
+	sh, err := artifact.Shared(id)
+	if err != nil || sh == nil {
+		return ""
+	}
+	return fmt.Sprintf("shared at %s (version %d)", sh.URL, sh.Version)
 }
 
 // artifactTextMost is the most of a file read_artifact gives as text.
@@ -503,8 +601,22 @@ func artifactRead(a artifactArgs) (string, error) {
 	if art.Description != "" {
 		fmt.Fprintf(&b, "\ndescription: %s", art.Description)
 	}
+	if l := sharedLine(art.ID); l != "" {
+		fmt.Fprintf(&b, "\n%s", l)
+	}
 	if len(v.Files) > 0 {
 		fmt.Fprintf(&b, "\nfiles: %s", strings.Join(v.Files, ", "))
+	}
+	if l := capsLine(v); l != "" {
+		fmt.Fprintf(&b, "\n%s", l)
+		if v.Capabilities.Has("db") {
+			if docs, size, err := artifact.Stats(art.ID); err == nil {
+				fmt.Fprintf(&b, "\ndata: %d documents, %d bytes (%s reads them)", docs, size, artifactDataTool)
+			}
+		}
+		if list, u, err := artifact.Assets(art.ID); err == nil && len(list) > 0 {
+			fmt.Fprintf(&b, "\nassets: %d, %d bytes, served at %s<id>", u.Files, u.Bytes, artifactBlobPath)
+		}
 	}
 	where, _, err := artifact.File(art.ID, v.N, a.Path)
 	if err != nil {
@@ -568,6 +680,9 @@ func artifactList(a artifactArgs) (string, error) {
 		if art.Description != "" {
 			fmt.Fprintf(&b, ": %s", art.Description)
 		}
+		if l := sharedLine(art.ID); l != "" {
+			fmt.Fprintf(&b, "; %s", l)
+		}
 		b.WriteString("\n")
 	}
 	if shown == 0 {
@@ -599,17 +714,22 @@ func artifactDelete(a artifactArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sh, _ := artifact.Shared(art.ID)
 	if err := artifact.Delete(art.ID); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Deleted %q and its %d versions; %s no longer opens.", art.Title, art.Latest().N, ArtifactURL(art.ID, 0)), nil
+	said := fmt.Sprintf("Deleted %q and its %d versions; %s no longer opens", art.Title, art.Latest().N, ArtifactURL(art.ID, 0))
+	if sh != nil {
+		said += ", and neither does its shared link, " + sh.URL
+	}
+	return said + ".", nil
 }
 
-// artifactPageRead: r reads an artifact's page or file, which the page
-// itself asks for with Origin: null (a module script, a fetch of its
+// artifactPageRead: r reads an artifact's page, file or asset, which the
+// page itself asks for with Origin: null (a module script, a fetch of its
 // data), and corsGuard lets it.
 func artifactPageRead(r *http.Request) bool {
-	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasPrefix(r.URL.Path, ArtifactPagePath)
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && (strings.HasPrefix(r.URL.Path, ArtifactPagePath) || strings.HasPrefix(r.URL.Path, artifact.BlobPath))
 }
 
 // artifactPage serves an artifact's page and files to the browser on this
@@ -655,6 +775,20 @@ func (s *Server) artifactPage(w http.ResponseWriter, r *http.Request) {
 		body = artifact.Served(body)
 	}
 	h := w.Header()
+	if strings.HasPrefix(ct, "text/html") {
+		// the page's runtime, and the token to its store, go into what a
+		// browser navigates to alone (artifactRuntimeFor)
+		h.Add("Vary", "Sec-Fetch-Mode")
+		if artifactRuntimeFor(r) {
+			rt, err := artifact.PageRuntime(art, n, ArtifactPagePath+ref+"/"+strings.TrimSuffix(artifactAPIDir, "/"))
+			if err != nil {
+				http.Error(w, "the artifact's runtime can't be made: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			rt.Home = ArtifactPagePath + id + "/"
+			body = artifact.WithRuntime(body, rt)
+		}
+	}
 	h.Set("Content-Type", ct)
 	h.Set("Content-Security-Policy", artifactPageCSP)
 	h.Set("X-Content-Type-Options", "nosniff")
