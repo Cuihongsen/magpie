@@ -3411,8 +3411,10 @@ async function openAgentModels(a, anchor, ev) {
   // until it is ticked (#1337), not every one not taken out
   // own: its pickers offer models the agent reaches on its own beside
   // magpie's (DeepSeek Harness's), which ownHidden leaves out (#1642)
-  let models, ordered = false, only = false, own = false, ownHidden = false;
-  try { ({ models, ordered, only = false, own = false, ownHidden = false } = await api("agent-models/" + encodeURIComponent(a.id))); }
+  // joins: shown only its picks, it takes in the models ticked in a
+  // provider's editor too (eiyuuzaki2333 on X)
+  let models, ordered = false, only = false, own = false, ownHidden = false, joins = false;
+  try { [{ models, ordered, only = false, own = false, ownHidden = false, joins = false }] = await Promise.all([api("agent-models/" + encodeURIComponent(a.id)), import("./agentjoin.js").catch(() => {})]); }
   catch (e) {
     if (agentModelsLoading === loading) { loading.drop(); statusErr(e); }
     return;
@@ -3467,9 +3469,13 @@ async function openAgentModels(a, anchor, ev) {
   const onlySw = libSwitch("use-credits", only, onlySay.textContent);
   onlyBox.title = t("Off: new models are shown. On: only the models ticked here are shown, and a model added later, of any provider, stays off until you tick it");
   onlyBox.append(onlySw, onlySay);
+  // only with Only models I pick on: shown every model, an agent has a
+  // provider's picks already (agentjoin.js)
+  const joinBox = window.amJoin?.(a, joins, () => me, () => disarm()) || el("i");
+  joinBox.hidden = !only;
   // takes back a first click on Hide all or Show all (twice, below)
   let disarm = () => {};
-  foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+  foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset, joinBox);
   // groups as the catalog has them, routing groups first; a long one
   // starts folded, unless the agent is set to a model in it
   const groups = [];
@@ -3602,6 +3608,7 @@ async function openAgentModels(a, anchor, ev) {
     only = !only;
     onlySw.classList.toggle("on", only);
     onlySw.setAttribute("aria-checked", String(only));
+    joinBox.hidden = !only;
     me.changed = true;
     // the models shown stay as they are, so the list drawn needs nothing
     // new; what comes back is the same, but for one added meanwhile
@@ -3613,6 +3620,7 @@ async function openAgentModels(a, anchor, ev) {
         only = !want;
         onlySw.classList.toggle("on", only);
         onlySw.setAttribute("aria-checked", String(only));
+        joinBox.hidden = !only;
       });
   };
   ownSw.onclick = (e) => {
@@ -3790,7 +3798,7 @@ async function openAgentModels(a, anchor, ev) {
       : kindOf(a) === "codex" ? t("Drag to put them in the order {agent} lists them; new models go last", { agent: a.name })
       : t("Drag to put them in the order magpie hands them to {agent}; new models go last", { agent: a.name });
     if (order) foot.replaceChildren(footNote, el("span", "sp"), unorder);
-    else foot.replaceChildren(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+    else foot.replaceChildren(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset, joinBox);
     list.scrollTop = 0;
     draw();
   };
@@ -16389,7 +16397,7 @@ const dayOfKey = (k) => new Date(k + "T12:00:00");
 // Settings' 万/亿 units (chineseUnits), 億 and 萬 in Traditional — every
 // count on the Usage page and in the panel, tokens or requests, says it
 // this one way
-let chineseUnits = false;
+let chineseUnits = false, inUncached = false;
 function fmtN(n) {
   if ((locale === "zh" || locale === "zh-TW") && chineseUnits) {
     const tw = locale === "zh-TW";
@@ -19927,8 +19935,10 @@ function applyPrefs(s, rate) {
     yuanProviders = yuan;
     costs = true;
   }
-  if (chineseUnits !== !!s.chineseUnits) {
+  // and Requests' In, with or without the cache (inUncached)
+  if (chineseUnits !== !!s.chineseUnits || inUncached !== !!s.inUncached) {
     chineseUnits = !!s.chineseUnits;
+    inUncached = !!s.inUncached;
     costs = true;
   }
   // the panel's Usage tab too, whenever drawn: its read can beat the state (dLdgKyRd)
@@ -20939,6 +20949,8 @@ function renderTrayUsage(s, keep) {
   $("#unitsRow").hidden = locale !== "zh" && locale !== "zh-TW";
   $("#unitsSegs").replaceChildren(segs([[false, t("K / M / B")], [true, t("万 / 亿")]], !!s.chineseUnits,
     (v) => savePrefs({ ...keep, chineseUnits: v })));
+  $("#inUncachedSegs").replaceChildren(segsOO(s.inUncached, (v) => savePrefs({ ...keep, inUncached: v })));
+  if (s.inUncached) $("#usageMore").open = true;
   $("#dayStartSegs").replaceChildren(segs([...Array(7).keys()].map((h) => [h, h + ":00"]), s.dayStart || 0, (v) => savePrefs({ ...keep, dayStart: v })));
   renderAlerts(s, keep);
   $("#plainNamesSegs").replaceChildren(suffixSegs());
@@ -23073,7 +23085,7 @@ function prefsKeep(s) {
     replyModel: s.replyModel || "", noLoopGuard: !!s.noLoopGuard, claudeLeanPrompt: !!s.claudeLeanPrompt, claudeNoExtraUsage: !!s.claudeNoExtraUsage, claudeRegionHold: !!s.claudeRegionHold, claudePrintMode: !!s.claudePrintMode, refusalRetries: s.refusalRetries ?? null, retryAfterCap: s.retryAfterCap ?? null,
     noUpdatePill: !!s.noUpdatePill, noAutoUpdate: !!s.noAutoUpdate, updateEvery: s.updateEvery || 360, autoRestart: !!s.autoRestart, noAutoDownload: !!s.noAutoDownload, updateChannel: s.updateChannel || "",
     trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayAnthropicMark: !!s.trayAnthropicMark, trayNoBird: !!s.trayNoBird, trayNoNumber: !!s.trayNoNumber, trayPace: !!s.trayPace, trayNoCost: !!s.trayNoCost, trayWindows: s.trayWindows || {}, vision: s.vision || "", visionEffort: s.visionEffort || "", searcherEffort: s.searcherEffort || "", imageGen: s.imageGen || "", videoGen: s.videoGen || "", imageTimeout: s.imageTimeout || 0, classifyTimeout: s.classifyTimeout || 0, searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd", totalCurrency: s.totalCurrency || "", trayCurrency: s.trayCurrency || "",
-    chineseUnits: !!s.chineseUnits, dayStart: s.dayStart || 0, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
+    chineseUnits: !!s.chineseUnits, inUncached: !!s.inUncached, dayStart: s.dayStart || 0, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
     turnDoneAlert: s.turnDoneAlert || 0, maskAlert: !!s.maskAlert };
 }
 
@@ -23993,10 +24005,10 @@ document.fonts?.ready.then(fitTop);
 // a font picked later (Settings' Font) can still be loading when it's applied
 document.fonts?.addEventListener("loadingdone", fitTop);
 
-// the shown page's tab; Routing's for its groups in the header's row,
-// which has no room for theirs (app.css)
+// the shown page's tab; in the header's row, which has no room for theirs
+// (app.css), Routing's for its groups and Library's for Artifacts
 function markNav(v) {
-  const tab = v === "groups" && !sideNav() ? "routing" : v;
+  const tab = sideNav() ? v : { groups: "routing", artifacts: "library" }[v] || v;
   for (const b of $("#nav").querySelectorAll("button[data-view]")) {
     const on = b.dataset.view === tab;
     b.classList.toggle("on", on);
